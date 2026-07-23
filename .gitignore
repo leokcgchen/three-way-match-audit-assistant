@@ -1,0 +1,27 @@
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 日志与本地报告产物
+logs/*.log
+logs/*.json
+reports/*.json
+
+# 系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Streamlit / 临时
+.streamlit/secrets.toml
+*.tmp
