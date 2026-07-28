@@ -14,6 +14,8 @@ venv/
 logs/*.log
 logs/*.json
 reports/*.json
+reports/*.csv
+!reports/.gitkeep
 
 # 系统与 IDE
 .DS_Store
