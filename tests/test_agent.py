@@ -15,7 +15,9 @@ if str(ROOT) not in sys.path:
 from src.agent import ContractComplianceAgent
 from src.models import (
     AgentFinalReport,
+    DeliveryReceiptInfo,
     ExtractedContractInfo,
+    LedgerEntryInfo,
     PartyInfo,
 )
 
@@ -30,6 +32,19 @@ SAMPLE_TEXT = """
 合同金额：500万元
 一、乙方应向甲方提供软件开发服务，并按约定交付产品。
 二、货物验收合格后，控制权转移至甲方。
+三、本合同收入按时点法确认。
+"""
+
+CUTOFF_TEXT = """
+软件开发服务合同
+合同编号：HT-2026-CUTOFF-001
+合同名称：软件开发服务合同（含账期）
+甲方：云创科技
+乙方：智汇数据
+签订日期：2026-03-15
+合同金额：500万元
+一、乙方应向甲方提供软件开发服务，并按约定交付产品。
+二、货物签收后10日，控制权转移至甲方并确认收入。
 三、本合同收入按时点法确认。
 """
 
@@ -101,10 +116,55 @@ def test_process_contract_full_pipeline() -> None:
             "conclusion"
         ] == "Not Selected"
         assert "程序表" in report.human_judgment_summary
+        # 向后兼容：未传签收单/序时账时不执行截止性测试
+        assert report.cutoff_test_result is None
+        assert downstream.get("cutoff_test_status") is None
+        assert downstream.get("expected_revenue_date") is None
+        assert downstream.get("actual_entry_date") is None
+        assert downstream.get("cutoff_deviation_days") is None
 
         saved = agent.save_report(report, output_dir=tmp)
         assert saved.exists()
         print("test_process_contract_full_pipeline: PASS")
+
+
+def test_agent_with_cutoff() -> None:
+    agent = ContractComplianceAgent()
+    with tempfile.TemporaryDirectory() as tmp:
+        file_path = Path(tmp) / "cutoff_contract.docx"
+        _write_docx(CUTOFF_TEXT, file_path)
+
+        receipt = DeliveryReceiptInfo(
+            receipt_date="2026-06-01",
+            received_quantity=1.0,
+            receiver_name="张三",
+            notes="验收合格",
+        )
+        ledger = LedgerEntryInfo(
+            entry_date="2026-06-11",
+            entry_amount=500.0,
+            voucher_id="记-126",
+            customer_name="云创科技",
+        )
+
+        report = agent.process_contract(
+            str(file_path),
+            ledger_entry=ledger,
+            delivery_receipt=receipt,
+        )
+
+        assert report.cutoff_test_result is not None
+        assert report.cutoff_test_result.test_status == "PASS"
+        assert report.cutoff_test_result.deviation_days == 0
+        assert report.cutoff_test_result.expected_revenue_date == "2026-06-11"
+        assert "截止性测试通过" in report.human_judgment_summary
+
+        downstream = report.to_downstream_json
+        assert downstream["expected_revenue_date"] == "2026-06-11"
+        assert downstream["actual_entry_date"] == "2026-06-11"
+        assert downstream["cutoff_test_status"] == "PASS"
+        assert downstream["cutoff_deviation_days"] == 0
+        print("test_agent_with_cutoff: PASS")
 
 
 def test_party_name_dedupe() -> None:
@@ -154,6 +214,7 @@ def test_skip_empty_party_name() -> None:
 
 if __name__ == "__main__":
     test_process_contract_full_pipeline()
+    test_agent_with_cutoff()
     test_party_name_dedupe()
     test_parse_failure_raises_value_error()
     test_skip_empty_party_name()

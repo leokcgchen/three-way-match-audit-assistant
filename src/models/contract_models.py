@@ -134,6 +134,57 @@ class CounterpartyInfo(BaseModel):
     )
 
 
+class DeliveryReceiptInfo(BaseModel):
+    receipt_date: Optional[str] = Field(
+        default=None, description="实际签收/验收日期，格式 YYYY-MM-DD"
+    )
+    received_quantity: Optional[float] = Field(
+        default=None, description="签收数量（如有）"
+    )
+    receiver_name: Optional[str] = Field(
+        default=None, description="签收人姓名（如有）"
+    )
+    notes: Optional[str] = Field(
+        default=None, description="备注（如验收意见等）"
+    )
+
+
+class LedgerEntryInfo(BaseModel):
+    entry_date: str = Field(description="账面入账日期，格式 YYYY-MM-DD")
+    entry_amount: float = Field(description="账面确认收入金额（万元）")
+    voucher_id: Optional[str] = Field(
+        default=None, description="凭证编号（如 记-126）"
+    )
+    customer_name: Optional[str] = Field(
+        default=None, description="客户名称（用于交叉核对）"
+    )
+
+
+class CutoffTestResult(BaseModel):
+    test_status: Literal["PASS", "WARNING", "FAIL"] = Field(
+        description="PASS=合规, WARNING=需关注（无签收单等）, FAIL=不合规"
+    )
+    expected_revenue_date: Optional[str] = Field(
+        default=None, description="根据合同+签收单计算出的应确认日期"
+    )
+    actual_entry_date: Optional[str] = Field(
+        default=None, description="实际入账日期"
+    )
+    deviation_days: Optional[int] = Field(
+        default=None, description="偏差天数（正=延迟，负=提前）"
+    )
+    issue_description: str = Field(
+        description="问题描述，如'提前6天确认收入'"
+    )
+    calculation_basis: str = Field(
+        description="计算依据说明，如'签收日2026-06-01 + 账期10日 = 应确认2026-06-11'"
+    )
+    calculation_trail: Optional[List[dict]] = Field(
+        default=None,
+        description="计算轨迹，记录每一步的计算过程",
+    )
+
+
 class AgentFinalReport(BaseModel):
     report_id: str = Field(description="报告唯一标识")
     generated_at: datetime = Field(
@@ -152,4 +203,8 @@ class AgentFinalReport(BaseModel):
     to_downstream_json: Dict = Field(
         default_factory=dict,
         description="供下游三单匹配Agent使用的结构化数据",
+    )
+    cutoff_test_result: Optional[CutoffTestResult] = Field(
+        default=None,
+        description="截止性测试结果（如提供了签收单和序时账）",
     )

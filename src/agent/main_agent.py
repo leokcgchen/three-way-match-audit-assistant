@@ -1,13 +1,14 @@
-"""合同合规审阅 Agent：串联解析、合规审阅与对手方数据获取。"""
+"""合同合规审阅 Agent：串联解析、合规审阅、对手方查询与截止性测试。"""
 
 from __future__ import annotations
 
 import json
 import random
+import re
 import string
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.data_fetcher import get_fetcher
 from src.models.contract_models import (
@@ -16,10 +17,13 @@ from src.models.contract_models import (
     CompanyProfile,
     ComplianceResult,
     CounterpartyInfo,
+    CutoffTestResult,
+    DeliveryReceiptInfo,
     ExtractedContractInfo,
+    LedgerEntryInfo,
 )
 from src.parsers import ContractParser
-from src.rules import ComplianceEngine
+from src.rules import ComplianceEngine, CutoffChecker
 from src.utils.logger import logger
 
 
@@ -27,14 +31,29 @@ class ContractComplianceAgent:
     """合同合规性审阅主控 Agent。"""
 
     DEFAULT_HUMAN_GUIDE = "请人工复核关键风险点后确认最终结论。"
+    PAYMENT_DAYS_PATTERNS = (
+        r"签收后\s*(\d+)\s*日",
+        r"交付后\s*(\d+)\s*日",
+        r"验收后\s*(\d+)\s*日",
+    )
 
     def __init__(self) -> None:
         self.parser = ContractParser()
         self.engine = ComplianceEngine()
         self.fetcher = get_fetcher()
+        self.cutoff_checker = CutoffChecker()
 
-    def process_contract(self, file_path: str) -> AgentFinalReport:
-        """执行完整流水线并输出 AgentFinalReport。"""
+    def process_contract(
+        self,
+        file_path: str,
+        ledger_entry: Optional[LedgerEntryInfo] = None,
+        delivery_receipt: Optional[DeliveryReceiptInfo] = None,
+    ) -> AgentFinalReport:
+        """执行完整流水线并输出 AgentFinalReport。
+
+        不传 ledger_entry / delivery_receipt 时行为与原先一致；
+        两者均传入时才执行截止性测试。
+        """
         logger.info("开始处理合同: {}", file_path)
 
         try:
@@ -62,12 +81,22 @@ class ContractComplianceAgent:
                 fail_count,
             )
 
+            cutoff_result = self._run_cutoff_test(
+                contract_info, ledger_entry, delivery_receipt
+            )
+
             report_id = self._generate_report_id()
             human_summary = self._build_human_judgment_summary(
-                compliance_result, audit_program, counterparty_info
+                compliance_result,
+                audit_program,
+                counterparty_info,
+                cutoff_result,
             )
             downstream = self._build_downstream_json(
-                contract_info, compliance_result, audit_program
+                contract_info,
+                compliance_result,
+                audit_program,
+                cutoff_result,
             )
 
             report = AgentFinalReport(
@@ -79,6 +108,7 @@ class ContractComplianceAgent:
                 counterparty_info=counterparty_info,
                 human_judgment_summary=human_summary,
                 to_downstream_json=downstream,
+                cutoff_test_result=cutoff_result,
             )
             logger.info("报告生成完成: {}", report_id)
             return report
@@ -103,6 +133,72 @@ class ContractComplianceAgent:
 
         logger.info("报告已保存: {}", output_path)
         return output_path
+
+    def _run_cutoff_test(
+        self,
+        contract_info: ExtractedContractInfo,
+        ledger_entry: Optional[LedgerEntryInfo],
+        delivery_receipt: Optional[DeliveryReceiptInfo],
+    ) -> Optional[CutoffTestResult]:
+        # 均未提供 → 跳过；任一提供 → 执行（缺字段由 CutoffChecker 返回 WARNING）
+        if ledger_entry is None and delivery_receipt is None:
+            logger.info("未提供签收单与序时账，跳过截止性测试")
+            return None
+
+        payment_days = self._extract_payment_days(contract_info)
+        receipt_date = (
+            delivery_receipt.receipt_date if delivery_receipt is not None else None
+        )
+        entry_date = ledger_entry.entry_date if ledger_entry is not None else None
+        logger.info(
+            "开始截止性测试: payment_days={}, receipt_date={}, entry_date={}",
+            payment_days,
+            receipt_date,
+            entry_date,
+        )
+        result = self.cutoff_checker.check(
+            contract_payment_days=payment_days,
+            receipt_date=receipt_date,
+            entry_date=entry_date,
+        )
+        logger.info(
+            "截止性测试完成: status={}, deviation_days={}",
+            result.test_status,
+            result.deviation_days,
+        )
+        return result
+
+    def _extract_payment_days(
+        self, contract_info: ExtractedContractInfo
+    ) -> Optional[int]:
+        """从履约义务描述或原文预览中提取账期天数。"""
+        texts: List[str] = [
+            o.description
+            for o in (contract_info.performance_obligations or [])
+            if o.description
+        ]
+        if contract_info.control_transfer_time:
+            texts.append(contract_info.control_transfer_time)
+
+        days = self._match_payment_days("\n".join(texts))
+        if days is not None:
+            return days
+
+        if contract_info.raw_text_preview:
+            return self._match_payment_days(contract_info.raw_text_preview)
+        return None
+
+    def _match_payment_days(self, text: str) -> Optional[int]:
+        if not text:
+            return None
+        for pattern in self.PAYMENT_DAYS_PATTERNS:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    continue
+        return None
 
     def _parse_contract(self, file_path: str) -> ExtractedContractInfo:
         try:
@@ -170,6 +266,7 @@ class ContractComplianceAgent:
         compliance_result: ComplianceResult,
         audit_program: AuditProgramResult,
         counterparty_info: CounterpartyInfo,
+        cutoff_result: Optional[CutoffTestResult] = None,
     ) -> str:
         risk_count = sum(
             1 for i in compliance_result.issues if i.status in {"WARNING", "FAIL"}
@@ -191,13 +288,25 @@ class ContractComplianceAgent:
             f"系统汇总={compliance_result.overall_status}，风险项={risk_count}；"
             f"对手方={party_count}家，异常={abnormal_count}家。"
         )
-        return f"{self.DEFAULT_HUMAN_GUIDE} {dynamic}"
+        summary = f"{self.DEFAULT_HUMAN_GUIDE} {dynamic}"
+        if cutoff_result is not None:
+            if cutoff_result.test_status == "PASS":
+                summary += " 截止性测试通过，收入入账期间合规。"
+            elif cutoff_result.test_status == "WARNING":
+                summary += f" 截止性测试需关注：{cutoff_result.issue_description}"
+            else:
+                summary += (
+                    f" 截止性测试未通过：{cutoff_result.issue_description}，"
+                    "建议调整入账期间。"
+                )
+        return summary
 
     def _build_downstream_json(
         self,
         contract_info: ExtractedContractInfo,
         compliance_result: ComplianceResult,
         audit_program: AuditProgramResult,
+        cutoff_result: Optional[CutoffTestResult] = None,
     ) -> Dict[str, Any]:
         role_map = {0: "甲方", 1: "乙方"}
         parties_payload = []
@@ -263,4 +372,16 @@ class ContractComplianceAgent:
                 ),
                 "pending_for_three_way_match": audit_program.pending_for_three_way_match,
             },
+            "expected_revenue_date": (
+                cutoff_result.expected_revenue_date if cutoff_result else None
+            ),
+            "actual_entry_date": (
+                cutoff_result.actual_entry_date if cutoff_result else None
+            ),
+            "cutoff_test_status": (
+                cutoff_result.test_status if cutoff_result else None
+            ),
+            "cutoff_deviation_days": (
+                cutoff_result.deviation_days if cutoff_result else None
+            ),
         }
