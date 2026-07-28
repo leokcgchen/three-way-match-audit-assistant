@@ -1,163 +1,136 @@
-"""FastAPI 后端：合同上传、三单数据、健康检查与报告查询。"""
+"""截止性测试 API：接收三单系统 JSON，返回标准化截止性结果，并追加底稿 CSV。"""
 
 from __future__ import annotations
 
-import json
-import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Literal, Optional
+from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import ValidationError
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from loguru import logger
 
 from config.settings import settings
-from src.agent import ContractComplianceAgent
-from src.models.contract_models import DeliveryReceiptInfo, LedgerEntryInfo
-from src.utils.logger import logger, setup_logger
+from src.models.schemas import CutoffRequest, CutoffResponse, CutoffTestResult
+from src.reporting.workbook_generator import WorkbookGenerator
+from src.rules.cutoff_checker import CutoffChecker
+from src.utils.date_extractor import extract_days_from_description
 
-setup_logger(settings.LOG_LEVEL)
+RiskLevel = Literal["无异常", "条款模糊-人工复核", "明确错报-需审计调整"]
+
+STATUS_TO_RISK: dict[str, RiskLevel] = {
+    "PASS": "无异常",
+    "WARNING": "条款模糊-人工复核",
+    "FAIL": "明确错报-需审计调整",
+}
+
+STATUS_TO_AUDIT: dict[str, str] = {
+    "PASS": "无异常",
+    "WARNING": "需人工复核条款",
+    "FAIL": "建议审计调整",
+}
+
+# 底稿 CSV 相对项目根目录（响应中返回相对路径）
+WORKBOOK_OUTPUT_DIR = "reports/"
+WORKBOOK_FILENAME = "底稿_GOSPD01010.csv"
+WORKBOOK_RELATIVE_PATH = f"{WORKBOOK_OUTPUT_DIR}{WORKBOOK_FILENAME}"
 
 app = FastAPI(
-    title="合同合规审阅 Agent API",
-    description=(
-        "上传合同并返回合规审阅报告；可选传入 ledger_entry / delivery_receipt "
-        "（JSON字符串）以执行截止性测试，供人工界面与下游 Agent 调用"
-    ),
-    version="1.1.0",
+    title="合同截止性测试服务",
+    description="接收三单系统推送，执行截止性测试并返回标准化结果",
+    version="0.3.0-f3",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_checker = CutoffChecker()
+_workbook = WorkbookGenerator()
 
-SUPPORTED_SUFFIXES = {".pdf", ".docx"}
-agent = ContractComplianceAgent()
+
+def _workbook_absolute_path() -> Path:
+    return Path(settings.REPORTS_DIR) / WORKBOOK_FILENAME
 
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    """浏览器访问根路径时跳转到 Swagger 文档。"""
     return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "module": "cutoff", "phase": "F-3"}
 
 
-def _parse_form_json(raw: Optional[str], field_name: str) -> Any:
-    """解析 Form 中的 JSON 字符串；非法则抛出 422。"""
-    if raw is None or not str(raw).strip():
-        return None
+def _resolve_payment_days(request: CutoffRequest) -> Optional[int]:
+    """优先使用账期天数；否则从描述提取；都没有则返回 None。"""
+    if request.合同账期天数 is not None:
+        return int(request.合同账期天数)
+    if request.合同账期描述:
+        return extract_days_from_description(request.合同账期描述)
+    return None
+
+
+def _build_response(
+    request: CutoffRequest,
+    result: CutoffTestResult,
+    payment_days: Optional[int],
+) -> CutoffResponse:
+    status = result.test_status
+    # 底稿回填同时携带原始 request 字段，供 CSV 列映射
+    return CutoffResponse(
+        报告ID=f"CUTOFF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
+        业务编号=request.业务编号,
+        测试状态=status,
+        风险等级=STATUS_TO_RISK[status],
+        应确认日期=result.expected_revenue_date,
+        偏差天数=result.deviation_days,
+        问题描述=result.issue_description,
+        计算依据=result.calculation_basis,
+        底稿回填={
+            "业务编号": request.业务编号,
+            "凭证号": None,
+            "客户名称": request.客户名称,
+            "合同编号": request.合同编号,
+            "入账日期": request.入账日期,
+            "入账金额": request.入账金额,
+            "签收日期": request.签收日期,
+            "合同账期（天）": payment_days,
+            "合同账期天数": payment_days,
+            "审计结论": STATUS_TO_AUDIT[status],
+        },
+        底稿文件路径=None,
+    )
+
+
+@app.post("/api/v1/cutoff", response_model=CutoffResponse)
+def run_cutoff(request: CutoffRequest) -> CutoffResponse:
+    """接收三单系统 JSON，执行截止性测试，追加底稿 CSV 并返回结果。"""
+    payment_days = _resolve_payment_days(request)
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{field_name} 不是合法 JSON: {exc}",
-        ) from exc
-
-
-def _parse_ledger_entry(raw: Optional[str]) -> Optional[LedgerEntryInfo]:
-    data = _parse_form_json(raw, "ledger_entry")
-    if data is None:
-        return None
-    try:
-        return LedgerEntryInfo.model_validate(data)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"ledger_entry 校验失败: {exc.errors()}",
-        ) from exc
-
-
-def _parse_delivery_receipt(raw: Optional[str]) -> Optional[DeliveryReceiptInfo]:
-    data = _parse_form_json(raw, "delivery_receipt")
-    if data is None:
-        return None
-    try:
-        return DeliveryReceiptInfo.model_validate(data)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"delivery_receipt 校验失败: {exc.errors()}",
-        ) from exc
-
-
-@app.post("/upload")
-async def upload_contract(
-    file: UploadFile = File(...),
-    ledger_entry: Optional[str] = Form(None),
-    delivery_receipt: Optional[str] = Form(None),
-) -> JSONResponse:
-    """接收合同文件，可选三单 JSON，执行审阅流水线并返回报告。"""
-    filename = file.filename or ""
-    suffix = Path(filename).suffix.lower()
-
-    if suffix not in SUPPORTED_SUFFIXES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件格式: {suffix or '(无扩展名)'}，仅支持 .pdf / .docx",
+        result = _checker.check(
+            contract_payment_days=payment_days,
+            receipt_date=request.签收日期,
+            entry_date=request.入账日期,
         )
-
-    parsed_ledger = _parse_ledger_entry(ledger_entry)
-    parsed_receipt = _parse_delivery_receipt(delivery_receipt)
-
-    tmp_path: Path | None = None
-    try:
-        content = await file.read()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(content)
-            tmp_path = Path(tmp.name)
-
-        logger.info(
-            "收到上传文件: name={}, tmp={}, has_ledger={}, has_receipt={}",
-            filename,
-            tmp_path,
-            parsed_ledger is not None,
-            parsed_receipt is not None,
-        )
-        report = agent.process_contract(
-            str(tmp_path),
-            ledger_entry=parsed_ledger,
-            delivery_receipt=parsed_receipt,
-        )
-        agent.save_report(report, output_dir=str(settings.REPORTS_DIR))
-        return JSONResponse(content=report.model_dump(mode="json"))
-
-    except ValueError as exc:
-        logger.error("合同解析失败: {}", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except HTTPException:
-        raise
     except Exception as exc:
-        logger.exception("处理上传文件时发生异常: {}", exc)
-        raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}") from exc
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                logger.warning("临时文件清理失败: {}", tmp_path)
+        logger.exception("CutoffChecker 执行异常: {}", exc)
+        raise HTTPException(status_code=500, detail=f"截止性测试执行失败: {exc}") from exc
 
-
-@app.get("/report/{report_id}")
-def get_report(report_id: str) -> JSONResponse:
-    """从 reports/ 目录读取已保存的报告。"""
-    report_path = settings.REPORTS_DIR / f"{report_id}.json"
-    if not report_path.exists():
-        raise HTTPException(status_code=404, detail=f"报告不存在: {report_id}")
+    response = _build_response(request, result, payment_days)
 
     try:
-        with report_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        return JSONResponse(content=data)
+        abs_path = _workbook_absolute_path()
+        _workbook.append_to_workbook(response, str(abs_path))
+        response.底稿文件路径 = WORKBOOK_RELATIVE_PATH
     except Exception as exc:
-        logger.exception("读取报告失败: {}", exc)
-        raise HTTPException(status_code=500, detail=f"读取报告失败: {exc}") from exc
+        logger.exception("底稿 CSV 写入失败: {}", exc)
+        raise HTTPException(status_code=500, detail=f"底稿CSV写入失败: {exc}") from exc
+
+    logger.info(
+        "cutoff done biz={} status={} risk={} payment_days={} workbook={}",
+        request.业务编号,
+        response.测试状态,
+        response.风险等级,
+        payment_days,
+        response.底稿文件路径,
+    )
+    return response

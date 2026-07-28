@@ -26,6 +26,19 @@ _CONTRACT_ID_PATTERNS = [
 ]
 
 
+def extract_days_from_description(text: Optional[str]) -> Optional[int]:
+    """从「签收后10日」「验收后30天」等描述中提取天数。"""
+    if text is None:
+        return None
+    raw = str(text).strip()
+    if not raw:
+        return None
+    match = re.search(r"(\d+)\s*[日天]", raw)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def extract_date_from_text(text: Optional[str]) -> Optional[str]:
     """提取文本中第一个日期，格式化为 YYYY-MM-DD；未找到返回 None。"""
     dates = extract_all_dates_from_text(text)
