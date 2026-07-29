@@ -1,5 +1,9 @@
 """底稿报表生成包。"""
 
-from src.reporting.workbook_generator import WorkbookGenerator, WORKBOOK_COLUMNS
+from src.reporting.workbook_generator import (
+    WORKBOOK_COLUMNS,
+    WorkbookGenerator,
+    WorkbookRecord,
+)
 
-__all__ = ["WorkbookGenerator", "WORKBOOK_COLUMNS"]
+__all__ = ["WorkbookGenerator", "WorkbookRecord", "WORKBOOK_COLUMNS"]

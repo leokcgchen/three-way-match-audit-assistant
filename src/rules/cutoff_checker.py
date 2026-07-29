@@ -1,15 +1,19 @@
-"""截止性测试核心计算逻辑。"""
+"""截止性测试核心计算逻辑。
+
+收入确认时点 = 商品控制权转移日（默认取验收/签收日），
+与序时账过账日比对；付款账期不参与应确认日计算。
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.models.contract_models import CutoffTestResult
 
 
 class CutoffChecker:
-    """根据签收日、账期与入账日判断收入确认截止性是否合理。"""
+    """根据控制权转移日与入账日判断收入确认截止性是否合理。"""
 
     TOLERANCE_DAYS = 2
 
@@ -23,25 +27,26 @@ class CutoffChecker:
         执行截止性测试。
 
         Args:
-            contract_payment_days: 合同约定账期天数（签收后N日）；为空按0处理
-            receipt_date: 签收/验收日期 YYYY-MM-DD
-            entry_date: 序时账入账日期 YYYY-MM-DD
+            contract_payment_days: 合同付款账期天数（仅记录，不参与应确认日计算；
+                保留供后续收款/账龄等测试使用）
+            receipt_date: 控制权转移日（验收完成/签收日）YYYY-MM-DD
+            entry_date: 序时账过账/入账日期 YYYY-MM-DD
         """
         trail: List[Dict[str, Any]] = []
 
-        # Step 1: 解析签收日期
+        # Step 1: 解析控制权转移日（签收/验收完成日）
         parsed_receipt = self._parse_date(receipt_date) if receipt_date else None
         step1: Dict[str, Any] = {
             "step": 1,
-            "action": "解析签收日期",
+            "action": "解析控制权转移日（签收/验收完成日）",
             "input": receipt_date if receipt_date is not None else None,
         }
         if not receipt_date:
             step1["output"] = None
-            step1["error"] = "签收日期为空"
+            step1["error"] = "签收/验收日期为空"
         elif parsed_receipt is None:
             step1["output"] = None
-            step1["error"] = f"无法解析签收日期: {receipt_date}"
+            step1["error"] = f"无法解析签收/验收日期: {receipt_date}"
         else:
             step1["output"] = self._format_date(parsed_receipt)
         trail.append(step1)
@@ -50,7 +55,7 @@ class CutoffChecker:
         parsed_entry = self._parse_date(entry_date) if entry_date else None
         step2: Dict[str, Any] = {
             "step": 2,
-            "action": "解析入账日期",
+            "action": "解析入账日期（序时账过账日）",
             "input": entry_date if entry_date is not None else None,
         }
         if not entry_date:
@@ -63,18 +68,25 @@ class CutoffChecker:
             step2["output"] = self._format_date(parsed_entry)
         trail.append(step2)
 
-        # Step 3: 读取账期
-        payment_days = 0 if contract_payment_days is None else int(contract_payment_days)
+        # Step 3: 记录付款账期（截止性不使用）
+        payment_note: Any
+        if contract_payment_days is not None:
+            payment_note = (
+                f"付款账期{int(contract_payment_days)}日"
+                "（结算条款，不影响收入确认时点；已保留供后续测试）"
+            )
+        else:
+            payment_note = "未提供付款账期（截止性不依赖账期）"
         trail.append(
             {
                 "step": 3,
-                "action": "读取账期",
-                "input": (
-                    f"合同约定签收后{payment_days}日"
+                "action": "记录付款账期（截止性忽略）",
+                "input": payment_note,
+                "output": (
+                    int(contract_payment_days)
                     if contract_payment_days is not None
-                    else "账期未提供，按0日处理"
+                    else None
                 ),
-                "output": payment_days,
             }
         )
 
@@ -82,7 +94,7 @@ class CutoffChecker:
             trail.append(
                 {
                     "step": 4,
-                    "action": "计算应确认日期",
+                    "action": "确定应确认日期",
                     "formula": None,
                     "output": None,
                     "error": "前置日期解析失败，跳过计算",
@@ -101,7 +113,10 @@ class CutoffChecker:
                 {
                     "step": 6,
                     "action": "判断合规性",
-                    "rule": f"偏差在±{self.TOLERANCE_DAYS}天内为PASS",
+                    "rule": (
+                        f"入账日相对控制权转移日，偏差在±{self.TOLERANCE_DAYS}天内为PASS；"
+                        "提前确认为FAIL；延迟为WARNING"
+                    ),
                     "output": "WARNING（缺少有效日期）",
                     "error": "缺少签收日期或入账日期，无法执行截止性测试",
                 }
@@ -115,27 +130,27 @@ class CutoffChecker:
                 deviation_days=None,
                 issue_description="缺少签收日期或入账日期，无法执行截止性测试",
                 calculation_basis=(
-                    f"receipt_date={receipt_date or '空'}, "
+                    f"control_transfer_date={receipt_date or '空'}, "
                     f"entry_date={entry_date or '空'}"
                 ),
                 calculation_trail=trail,
             )
 
-        # Step 4: 应确认日期
-        expected_dt = parsed_receipt + timedelta(days=payment_days)
+        # Step 4: 应确认日 = 控制权转移日（不加账期）
+        expected_dt = parsed_receipt
         expected_str = self._format_date(expected_dt)
-        receipt_str = self._format_date(parsed_receipt)
+        receipt_str = expected_str
         entry_str = self._format_date(parsed_entry)
         trail.append(
             {
                 "step": 4,
-                "action": "计算应确认日期",
-                "formula": f"{receipt_str} + {payment_days}天",
+                "action": "确定应确认日期",
+                "formula": "应确认日 = 控制权转移日（验收/签收日），不含付款账期",
                 "output": expected_str,
             }
         )
 
-        # Step 5: 偏差天数
+        # Step 5: 偏差天数 = 实际入账 − 应确认
         deviation_days = (parsed_entry.date() - expected_dt.date()).days
         trail.append(
             {
@@ -147,32 +162,42 @@ class CutoffChecker:
         )
 
         calculation_basis = (
-            f"签收日{receipt_str} + 账期{payment_days}日 = 应确认{expected_str}；"
-            f"实际入账{entry_str}"
+            f"控制权转移日（签收/验收）{receipt_str} = 应确认{expected_str}；"
+            f"实际入账{entry_str}；付款账期不参与截止判断"
         )
 
         # Step 6: 判断
         if -self.TOLERANCE_DAYS <= deviation_days <= self.TOLERANCE_DAYS:
             status = "PASS"
             issue = (
-                f"入账日期与应确认日期偏差{deviation_days}天，"
+                f"入账日期与控制权转移日偏差{deviation_days}天，"
                 f"在±{self.TOLERANCE_DAYS}天容差内"
             )
             verdict = f"PASS（偏差{deviation_days}天）"
         elif deviation_days < -self.TOLERANCE_DAYS:
             status = "FAIL"
-            issue = f"提前{abs(deviation_days)}天确认收入，存在跨期风险"
+            issue = (
+                f"商品控制权于{receipt_str}才转移，收入应属该时点所属期间；"
+                f"账务于{entry_str}入账，提前{abs(deviation_days)}天确认收入，"
+                f"截止认定存在错报"
+            )
             verdict = f"FAIL（提前{abs(deviation_days)}天）"
         else:
             status = "WARNING"
-            issue = f"延迟{deviation_days}天确认收入，建议核实是否截期"
+            issue = (
+                f"控制权已于{receipt_str}转移，账务于{entry_str}入账，"
+                f"延迟{deviation_days}天确认收入，建议核实是否截期"
+            )
             verdict = f"WARNING（延迟{deviation_days}天）"
 
         trail.append(
             {
                 "step": 6,
                 "action": "判断合规性",
-                "rule": f"偏差在±{self.TOLERANCE_DAYS}天内为PASS",
+                "rule": (
+                    f"入账日相对控制权转移日，偏差在±{self.TOLERANCE_DAYS}天内为PASS；"
+                    "提前确认为FAIL；延迟为WARNING"
+                ),
                 "output": verdict,
             }
         )

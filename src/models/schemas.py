@@ -33,10 +33,12 @@ class CutoffRequest(BaseModel):
     合同编号: Optional[str] = Field(default=None)
     客户名称: Optional[str] = Field(default=None)
     合同账期描述: Optional[str] = Field(
-        default=None, description='如"签收后10日"'
+        default=None,
+        description='付款/结算条款，如"签收后10日"；截止性不使用，保留供收款等测试',
     )
     合同账期天数: Optional[int] = Field(
-        default=None, description="优先使用此数值"
+        default=None,
+        description="付款账期天数；截止性公式不使用，仍写入底稿供后续测试",
     )
     签收日期: str = Field(description="必填，YYYY-MM-DD")
     入账日期: str = Field(description="必填，YYYY-MM-DD")

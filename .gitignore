@@ -27,3 +27,4 @@ Thumbs.db
 # Streamlit / 临时
 .streamlit/secrets.toml
 *.tmp
+.column_mapping_cache.json

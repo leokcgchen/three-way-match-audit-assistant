@@ -24,16 +24,18 @@ def _post(payload: dict) -> dict:
 
 
 def test_pass() -> None:
+    # 应确认日=签收日；入账同日 → PASS（账期天数被忽略）
     data = _post(
         {
             "业务编号": "SO-001",
             "签收日期": "2026-06-01",
-            "入账日期": "2026-06-11",
+            "入账日期": "2026-06-01",
             "入账金额": 500,
             "合同账期天数": 10,
         }
     )
     assert data["测试状态"] == "PASS", data
+    assert data["应确认日期"] == "2026-06-01", data
     print("test_pass: PASS")
 
 
@@ -41,18 +43,19 @@ def test_fail_early() -> None:
     data = _post(
         {
             "业务编号": "SO-002",
-            "签收日期": "2026-06-01",
-            "入账日期": "2026-06-05",
+            "签收日期": "2026-01-02",
+            "入账日期": "2025-12-10",
             "入账金额": 500,
-            "合同账期天数": 10,
+            "合同账期天数": 30,
         }
     )
     assert data["测试状态"] == "FAIL", data
+    assert data["应确认日期"] == "2026-01-02", data
     print("test_fail_early: PASS")
 
 
-def test_warning_no_payment_days() -> None:
-    # 无账期时引擎按 0 天处理：签收 06-01、入账 06-11 → 延迟 → WARNING
+def test_warning_delayed() -> None:
+    # 无账期：签收 06-01、入账 06-11 → 延迟 → WARNING
     data = _post(
         {
             "业务编号": "SO-003",
@@ -62,14 +65,15 @@ def test_warning_no_payment_days() -> None:
         }
     )
     assert data["测试状态"] == "WARNING", data
-    print("test_warning_no_payment_days: PASS")
+    assert data["应确认日期"] == "2026-06-01", data
+    print("test_warning_delayed: PASS")
 
 
 if __name__ == "__main__":
     try:
         test_pass()
         test_fail_early()
-        test_warning_no_payment_days()
+        test_warning_delayed()
         print("全部测试通过：/api/v1/cutoff 正常。")
     except requests.exceptions.ConnectionError:
         print("无法连接 API。请先运行: python run_api.py")
