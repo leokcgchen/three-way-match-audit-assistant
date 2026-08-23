@@ -199,7 +199,12 @@ def _advisory_events(job: dict[str, Any]) -> list[dict[str, Any]]:
                 action_kind="DECIDE_ADVISORY",
                 action_step="field_confirm",
                 source_ref=source_ref,
-                evidence=evidence,
+                evidence={
+                    **evidence,
+                    "candidate_id": candidate.get("candidate_id"),
+                    "field_name": payload.get("field_name"),
+                    "file_name": payload.get("file_name") or evidence.get("source_doc"),
+                },
                 ai_suggestion=payload.get("normalized_candidate")
                 or payload.get("suggested_biz_id")
                 or payload.get("value"),
@@ -237,7 +242,7 @@ def _document_events(job: dict[str, Any]) -> list[dict[str, Any]]:
                     action_kind="REVIEW_FIELD",
                     action_step="field_confirm",
                     source_ref=f"ledger:{file_name}",
-                    evidence={"file_name": file_name},
+                    evidence={"file_name": file_name, "field_name": "totalAmount"},
                     ledger_value=doc.get("ledger_amount"),
                     observed_value=(doc.get("fields") or {}).get("totalAmount"),
                 )
@@ -359,6 +364,29 @@ def _deduplicate(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _same_resolved_fact(job: dict[str, Any], event: dict[str, Any]) -> bool:
+    decisions = job.get("review_event_decisions") or {}
+    if not isinstance(decisions, dict):
+        return False
+    record = decisions.get(str(event.get("event_id") or ""))
+    if not isinstance(record, dict) or str(record.get("state") or "").upper() != "RESOLVED":
+        return False
+    previous = record.get("event")
+    if not isinstance(previous, dict):
+        return False
+    fact_keys = (
+        "chain_id",
+        "event_type",
+        "source_ref",
+        "reason",
+        "evidence",
+        "ledger_value",
+        "observed_value",
+        "ai_suggestion",
+    )
+    return all(previous.get(key) == event.get(key) for key in fact_keys)
+
+
 def build_review_events(job: dict[str, Any]) -> list[dict[str, Any]]:
     """返回当前 Job 需要人工处理的开放事件。"""
     from src.workflow.sample_desk import build_desk_chains
@@ -375,7 +403,7 @@ def build_review_events(job: dict[str, Any]) -> list[dict[str, Any]]:
     events.extend(_rule_conflict_events(job))
     events.extend(_ocr_issue_events(job))
     events.extend(_quality_sample_events(job))
-    return _deduplicate(events)
+    return [event for event in _deduplicate(events) if not _same_resolved_fact(job, event)]
 
 
 def review_event_summary(events: Iterable[dict[str, Any]]) -> dict[str, int]:

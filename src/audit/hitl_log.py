@@ -41,6 +41,7 @@ def append_hitl_event(
     after: Any = None,
     reason: str = "",
     operator: Optional[str] = None,
+    review_event_id: str = "",
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """追加一条 HITL 事件；失败时仍返回事件对象（不抛给 UI）。"""
@@ -54,6 +55,7 @@ def append_hitl_event(
         "before": before,
         "after": after,
         "reason": reason or "",
+        "review_event_id": review_event_id or "",
         "extra": extra or {},
     }
     try:

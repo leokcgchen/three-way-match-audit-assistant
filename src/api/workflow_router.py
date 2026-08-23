@@ -301,11 +301,59 @@ class DuplicateOverrideBody(BaseModel):
     reason: str = ""
 
 
+class ReviewEventDecisionBody(BaseModel):
+    decision: Literal[
+        "ACCEPT_AI", "OVERRIDE", "MANUAL_VALUE", "AUDIT_FAIL", "DOCUMENT_ISSUE"
+    ]
+    value: Any = None
+    reason: str = ""
+    operator: str = ""
+
+
 def _job_or_404(job_id: str) -> dict[str, Any]:
     job = JOB_STORE.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+@router.get("/jobs/{job_id}/events")
+def list_review_events(
+    job_id: str,
+    state: str = Query(default="OPEN"),
+    include_passed: bool = Query(default=False),
+) -> dict[str, Any]:
+    from src.workflow.review_event_decisions import resolved_review_events
+    from src.workflow.review_events import build_review_events, review_event_summary
+
+    job = _job_or_404(job_id)
+    events = build_review_events(job)
+    if include_passed:
+        events.extend(resolved_review_events(job))
+    state_u = str(state or "").upper()
+    if state_u and state_u != "ALL":
+        events = [row for row in events if str(row.get("state") or "").upper() == state_u]
+    # include_passed means "show history too" even when the default state was OPEN.
+    if include_passed and state_u == "OPEN":
+        events = build_review_events(job) + resolved_review_events(job)
+    return {"events": events, "summary": review_event_summary(events)}
+
+
+@router.post("/jobs/{job_id}/events/{event_id}/decision")
+def decide_review_event(
+    job_id: str,
+    event_id: str,
+    body: ReviewEventDecisionBody,
+) -> dict[str, Any]:
+    from src.workflow.review_event_decisions import apply_review_decision
+
+    _job_or_404(job_id)
+    try:
+        return apply_review_decision(job_id, event_id, body.model_dump())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _http_from_value(exc: ValueError, *, job: dict[str, Any] | None = None) -> HTTPException:
