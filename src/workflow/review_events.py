@@ -236,7 +236,7 @@ def _document_events(job: dict[str, Any]) -> list[dict[str, Any]]:
                     job,
                     chain_id=chain_id,
                     event_type="LEDGER_MISMATCH",
-                    severity="REVIEW",
+                    severity="BLOCKING",
                     title="单据与账载信息不一致",
                     reason=str(doc.get("ledger_match_message") or "账载匹配失败。"),
                     action_kind="REVIEW_FIELD",

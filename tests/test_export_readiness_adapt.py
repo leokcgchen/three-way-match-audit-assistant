@@ -44,7 +44,11 @@ def test_invalidate_clears_split_keys():
 
 def test_export_readiness_fail_released_by_gate5():
     job = {
-        "classified": [{"file_name": "a.pdf", "doc_type": "invoice", "fields": {"orderNo": "SO25-0281"}}],
+        "classified": [
+            {"file_name": "invoice.pdf", "doc_type": "invoice", "fields": {"orderNo": "SO25-0281"}},
+            {"file_name": "order.pdf", "doc_type": "order", "fields": {"orderNo": "SO25-0281"}},
+            {"file_name": "receipt.pdf", "doc_type": "receipt", "fields": {"orderNo": "SO25-0281"}},
+        ],
         "goal_ids": ["gospd01030"],
         "plan": {
             "goal_ids": ["gospd01030"],
@@ -131,3 +135,27 @@ def test_clear_three_way_fields_helper():
     assert d["three_way_match"] is None
     assert d["cutoff_test"] is None
     assert d["keep"] == 1
+
+
+def test_open_blocking_review_event_prevents_export():
+    job = {
+        "job_id": "event-blocker",
+        "classified": [
+            {
+                "file_name": "invoice.pdf",
+                "doc_type": "invoice",
+                "fields": {"totalAmount": 98},
+                "ledger_evaluated": True,
+                "ledger_match_ok": False,
+                "ledger_amount": 100,
+            }
+        ],
+        "plan": {"goal_ids": [], "required_steps": []},
+        "conclusion_confirmed": True,
+        "advisory_candidates": [],
+    }
+    readiness = build_export_readiness(job)
+    assert readiness["ready"] is False
+    assert readiness["blocked_count"] >= 1
+    event_stage = next(stage for stage in readiness["stages"] if stage["id"] == "review_events")
+    assert event_stage["action"]["step"] == "event_review"

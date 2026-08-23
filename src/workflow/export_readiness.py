@@ -545,7 +545,54 @@ def build_export_readiness(job: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
-    blocking = [stage for stage in stages if stage["blocking"]]
+    from src.workflow.review_events import build_review_events
+
+    blocking_events = [
+        event
+        for event in build_review_events(job)
+        if str(event.get("state") or "OPEN").upper() == "OPEN"
+        and str(event.get("severity") or "").upper() == "BLOCKING"
+    ]
+    stage_ids_by_event = {
+        "MISSING_DOCUMENT": {"upload_ocr", "business_group", "field_mapping", "conclusion"},
+        "LOW_CONFIDENCE": {"field_mapping", "amount_ambiguity"},
+        "LEDGER_MISMATCH": {"field_mapping"},
+        "RELATIONSHIP_AMBIGUITY": {"business_group"},
+        "RULE_CONFLICT": {"business_group", "conclusion"},
+        "AUDIT_TEST_FAILED": {"three_way", "cutoff", "conclusion"},
+        "PROVENANCE_GAP": {"upload_ocr"},
+        "QUALITY_SAMPLE": set(),
+    }
+    represented_stage_ids = {
+        stage_id
+        for event in blocking_events
+        for stage_id in stage_ids_by_event.get(str(event.get("event_type") or ""), set())
+    }
+    # A review event is the human-facing form of these structural gates. Remove
+    # their duplicate rows and route the auditor through one adjudication queue.
+    stages = [
+        stage
+        for stage in stages
+        if not (stage.get("blocking") and str(stage.get("id") or "") in represented_stage_ids)
+    ]
+    if blocking_events:
+        affected = sorted(
+            {str(event.get("chain_id") or "") for event in blocking_events if event.get("chain_id")}
+        )
+        stages.append(
+            _stage(
+                "review_events",
+                "待裁决事项",
+                status="NEEDS_REVIEW",
+                reason=f"还有 {len(blocking_events)} 个阻断事件未关闭。",
+                action_step="event_review",
+                action_label="处理阻断项",
+                affected_groups=affected,
+            )
+        )
+
+    structural_blocking = [stage for stage in stages if stage["blocking"] and stage["id"] != "review_events"]
+    blocked_count = len(blocking_events) + len(structural_blocking)
     lights: dict[str, Any] = {"green": 0, "yellow": 0, "red": 0, "wait": 0, "issues": [], "request_docs": []}
     if gospd:
         try:
@@ -555,10 +602,10 @@ def build_export_readiness(job: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
     return {
-        "schema_version": "1.1",
-        "ready": not blocking,
-        "summary": "已满足底稿生成条件。" if not blocking else f"底稿生成前还需处理 {len(blocking)} 项。",
-        "blocked_count": len(blocking),
+        "schema_version": "1.2",
+        "ready": blocked_count == 0,
+        "summary": "已满足底稿生成条件。" if blocked_count == 0 else f"底稿生成前还需处理 {blocked_count} 项。",
+        "blocked_count": blocked_count,
         "stages": stages,
         "lights": lights,
     }

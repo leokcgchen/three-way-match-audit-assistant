@@ -79,12 +79,27 @@ export function WorkbookPage({ job, onJob, onGo }: Props) {
       await loadReadiness()
       const n = (next.workbook_paths || []).length || (next.workbook_path ? 1 : 0)
       setMsg(n > 1 ? `已生成 ${n} 份底稿（按勾选目标各一份，互不偏重）。` : '底稿已生成，可预览或下载。')
+      const firstFormat = next.workbook_paths?.[0]?.format
+      const link = document.createElement('a')
+      link.href = api.workbookDownloadUrl(job.job_id, firstFormat || undefined)
+      link.download = ''
+      link.click()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       await loadReadiness()
     } finally {
       setBusy(false)
     }
+  }
+
+  const handlePrimary = () => {
+    if (!readiness) return
+    if (readiness.ready) {
+      void exportWb()
+      return
+    }
+    const target = readiness.stages.find((stage) => stage.blocking && stage.action)?.action?.step
+    onGo(target || 'event_review')
   }
 
   return (
@@ -96,24 +111,6 @@ export function WorkbookPage({ job, onJob, onGo }: Props) {
             按所选底稿目标导出；多选官方模板时各生成一份。下方「导出前检查」与后端导出门禁同源。
           </div>
         </div>
-        <div className="toolbar">
-          <span
-            className="tip-anchor"
-            data-tip={
-              readiness?.ready
-                ? '按所选目标生成 Excel 审阅底稿。'
-                : '导出条件还没齐，先处理上方检查清单。'
-            }
-          >
-            <button
-              className="btn primary"
-              disabled={busy || !readiness?.ready}
-              onClick={() => void exportWb()}
-            >
-              {busy ? '生成中…' : '生成审阅底稿 xlsx'}
-            </button>
-          </span>
-        </div>
       </div>
       <div className="panel-body">
         <section className={`export-readiness ${readiness?.ready ? 'ready' : 'blocked'}`} aria-live="polite">
@@ -123,8 +120,19 @@ export function WorkbookPage({ job, onJob, onGo }: Props) {
               <h4>{readiness ? readiness.summary : '正在检查导出条件…'}</h4>
               <p>这里是生成底稿的唯一门禁清单；每一项都能直接进入对应处理页面。</p>
             </div>
-            <button className="btn" type="button" onClick={() => void loadReadiness()}>
-              刷新检查
+            <button
+              className="btn primary export-primary-cta"
+              type="button"
+              disabled={!readiness || busy}
+              onClick={handlePrimary}
+            >
+              {!readiness
+                ? '正在检查…'
+                : busy
+                  ? '正在生成…'
+                  : readiness.ready
+                    ? '生成并下载底稿'
+                    : `处理 ${readiness.blocked_count} 个阻断项`}
             </button>
           </div>
           {readinessErr && <p className="err">无法读取导出条件：{readinessErr}</p>}
