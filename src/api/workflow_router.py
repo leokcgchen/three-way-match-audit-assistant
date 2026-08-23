@@ -19,6 +19,7 @@ from src.evidence_match.disambiguation import apply_disambiguation_proposal
 from src.llm.prompt_catalog import catalog_summary
 from src.models.relation_candidates import decide_relation
 from src.workflow.job_store import JOB_STORE
+from src.workflow.packet_relations import normalize_business_ids
 from src.workflow.pipeline import (
     apply_ledger_to_classified_list,
     build_workbooks_for_job,
@@ -122,6 +123,57 @@ class PacketConfirmBody(BaseModel):
     units: list[PacketUnitEdit] = Field(default_factory=list)
     file_modes: dict[str, str] = Field(default_factory=dict)
     start_ocr: bool = True
+
+
+def _packet_confirmation_audit(
+    existing: list[dict[str, Any]],
+    final: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Summarize consequential human packet edits for the HITL trail."""
+    existing_by_page: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for unit in existing:
+        for page in unit.get("pages") or []:
+            existing_by_page.setdefault(
+                (str(unit.get("source_file") or ""), int(page)), []
+            ).append(unit)
+
+    boundary_changes = 0
+    type_overrides = 0
+    business_changes = 0
+    batch_confirmed = 0
+    for unit in final:
+        if unit.get("dropped"):
+            continue
+        overlaps = [
+            old
+            for page in unit.get("pages") or []
+            for old in existing_by_page.get(
+                (str(unit.get("source_file") or ""), int(page)), []
+            )
+        ]
+        if unit.get("boundary_confirmed"):
+            batch_confirmed += 1
+            if not overlaps or any(
+                not old.get("boundary_confirmed") for old in overlaps
+            ):
+                boundary_changes += 1
+        doc_type = str(unit.get("doc_type") or "")
+        suggested = str(unit.get("suggested_doc_type") or "")
+        if unit.get("doc_type_source") == "human" and doc_type != suggested:
+            type_overrides += 1
+        before_business = {
+            business_id
+            for old in overlaps
+            for business_id in normalize_business_ids(old)
+        }
+        if set(normalize_business_ids(unit)) != before_business:
+            business_changes += 1
+    return {
+        "manual_boundary_changes": boundary_changes,
+        "manual_type_overrides": type_overrides,
+        "business_link_changes": business_changes,
+        "batch_confirmed_units": batch_confirmed,
+    }
 
 
 class LedgerApplyBody(BaseModel):
@@ -1589,6 +1641,7 @@ def post_packet_confirm(job_id: str, body: PacketConfirmBody) -> dict[str, Any]:
     from src.workflow.packet_engine import confirm_packet
 
     job = _job_or_404(job_id)
+    existing_units = list(job.get("packet_units") or [])
     edits = [item.model_dump() for item in (body.units or [])]
     path_by_file = {
         str(f.get("file_name") or ""): str(f.get("path") or "")
@@ -1615,12 +1668,20 @@ def post_packet_confirm(job_id: str, body: PacketConfirmBody) -> dict[str, Any]:
         packet_confirmed=True,
         active_step="upload_ocr",
     )
+    audit_counts = _packet_confirmation_audit(
+        existing_units,
+        list(patch.get("packet_units") or []),
+    )
     append_hitl_event(
         action="packet_confirm",
         entity_type="job",
         entity_id=job_id,
         before=None,
-        after={"units": len(patch.get("packet_units") or []), "files": len(specs)},
+        after={
+            "units": len(patch.get("packet_units") or []),
+            "files": len(specs),
+            **audit_counts,
+        },
         reason="确认拆包并物化单据",
     )
     if body.start_ocr:
@@ -1795,6 +1856,25 @@ def process_pending(
                     detail={"message": "请先完成拆包分笔", "job": job},
                 )
             pending = list(job.get("pending_files") or [])
+
+    if job.get("packet_confirmed") and job.get("packet_units"):
+        from src.workflow.packet_relations import validate_confirmable_units
+
+        run = job.get("packet_run") or {}
+        multi_page_files = {
+            str(meta.get("file_name") or "")
+            for meta in (run.get("files") or [])
+            if int(meta.get("page_count") or 0) > 1
+            and str(meta.get("kind") or "standard") != "standard"
+        }
+        try:
+            validate_confirmable_units(
+                list(job.get("packet_units") or []),
+                multi_page_files=multi_page_files,
+                start_ocr=True,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     specs: list[dict[str, Any]] = []
     for item in pending:

@@ -126,6 +126,7 @@ export function PacketContactSheet({
                     key={unit.unit_id}
                     className={`packet-contact-unit${selected ? ' is-selected' : ''}${unit.needs_review ? ' is-review' : ''}${unit.dropped ? ' is-dropped' : ''}`}
                     aria-label={`${typeLabel(unit)}，${pageRange(unit.pages)}`}
+                    style={{ gridColumn: `span ${Math.min(Math.max(unit.pages.length, 1), 3)}` }}
                   >
                     <div className="packet-contact-boundary">
                       <strong>{typeLabel(unit)} · {pageRange(unit.pages)}</strong>

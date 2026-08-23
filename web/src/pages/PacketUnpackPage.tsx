@@ -81,37 +81,51 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job.job_id, run?.status])
 
-  const pageKeys = useMemo(
-    () =>
-      shownFiles.flatMap((file) => {
-        const observed = units
-          .filter((unit) => unit.source_file === file.file_name)
-          .flatMap((unit) => unit.pages)
-        const count = file.page_count || Math.max(0, ...observed)
-        return Array.from({ length: count }, (_, index) => ({
-          sourceFile: file.file_name,
-          page: index + 1,
-        }))
-      }),
-    [shownFiles, units],
-  )
+  const pageCountSignature = shownFiles
+    .map((file) => {
+      const observed = units
+        .filter((unit) => unit.source_file === file.file_name)
+        .flatMap((unit) => unit.pages)
+      return file.page_count || Math.max(0, ...observed)
+    })
+    .join(',')
+  const pageKeys = useMemo(() => {
+    const counts = pageCountSignature.split(',').map(Number)
+    return shownFiles.flatMap((file, fileIndex) =>
+      Array.from({ length: counts[fileIndex] || 0 }, (_, index) => ({
+        sourceFile: file.file_name,
+        page: index + 1,
+      })),
+    )
+  }, [shownFiles, pageCountSignature])
 
   useEffect(() => {
     let cancelled = false
     thumbnailUrls.current.forEach((url) => URL.revokeObjectURL(url))
     thumbnailUrls.current = []
     setThumbnails({})
-    void Promise.allSettled(
-      pageKeys.map(async ({ sourceFile, page }) => {
-        const response = await api.previewPage(job.job_id, sourceFile, page - 1)
-        const url = URL.createObjectURL(response.blob)
-        if (cancelled) {
-          URL.revokeObjectURL(url)
-          return
+    const queue = [...pageKeys]
+    const loadNext = async () => {
+      while (!cancelled) {
+        const item = queue.shift()
+        if (!item) return
+        const { sourceFile, page } = item
+        try {
+          const response = await api.previewPage(job.job_id, sourceFile, page - 1)
+          const url = URL.createObjectURL(response.blob)
+          if (cancelled) {
+            URL.revokeObjectURL(url)
+            return
+          }
+          thumbnailUrls.current.push(url)
+          setThumbnails((current) => ({ ...current, [`${sourceFile}:${page}`]: url }))
+        } catch {
+          // A missing thumbnail must not block reviewing the remaining pages.
         }
-        thumbnailUrls.current.push(url)
-        setThumbnails((current) => ({ ...current, [`${sourceFile}:${page}`]: url }))
-      }),
+      }
+    }
+    void Promise.allSettled(
+      Array.from({ length: Math.min(4, queue.length) }, () => loadNext()),
     )
     return () => {
       cancelled = true
@@ -307,7 +321,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
                 </button>
                 <div className="packet-file-tools">
                   <button type="button" disabled={locked} onClick={() => {
-                    setFileModes((current) => ({ ...current, [file.file_name]: 'single_chain' }))
+                    setFileModes((current) => ({ ...current, [file.file_name]: 'single' }))
                     markFileSingleBusiness(file.file_name)
                   }}>整份同一业务</button>
                   <button type="button" disabled={locked} onClick={() => dropBlankPages(file.file_name)}>
