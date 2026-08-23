@@ -4241,7 +4241,13 @@ code {
   --packet-mint: #eafaf4;
   --packet-amber: #fff6dc;
   --packet-red: #fff0ef;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding-bottom: 5.5rem;
 }
 .packet-review-toolbar {
