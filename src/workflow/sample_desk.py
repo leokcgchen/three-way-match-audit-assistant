@@ -456,13 +456,28 @@ def build_desk_chains(job: dict[str, Any]) -> list[dict[str, Any]]:
     for cid in desk_sample_ids(job):
         base = dict(by_id.get(cid) or {"chain_id": cid, "doc_count": 0, "doc_types": [], "file_names": []})
         st = desk_row_status(job, cid)
-        rows.append(
+        row = {
+            **base,
+            **st,
+            "in_sample_population": chain_in_population(cid, pop if isinstance(pop, dict) else None),
+        }
+        # Lazy import keeps the desk status layer independent from the event
+        # projection module while still exposing one front-end-ready row.
+        from src.workflow.review_events import events_for_desk_row
+
+        row_events = events_for_desk_row(job, row)
+        row.update(
             {
-                **base,
-                **st,
-                "in_sample_population": chain_in_population(cid, pop if isinstance(pop, dict) else None),
+                "_review_events": row_events,
+                "event_count": len(row_events),
+                "blocking_event_count": sum(
+                    1 for event in row_events if event.get("severity") == "BLOCKING"
+                ),
+                "missing_doc_types": list(st.get("missing_doc_labels") or []),
+                "auto_passed": st.get("light") == "green" and not row_events,
             }
         )
+        rows.append(row)
     return rows
 
 
