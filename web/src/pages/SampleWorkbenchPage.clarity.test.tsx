@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Job } from '../types'
 
@@ -47,6 +47,7 @@ const job: Job = {
   active_step: 'sample_desk',
   sample_population: { business_ids: Array.from({ length: 10 }, (_, i) => `SO-${i + 1}`), count: 10 },
   pending_files: [],
+  period_end: '2025-12-31',
 }
 
 describe('SampleWorkbenchPage clarity controls', () => {
@@ -76,5 +77,24 @@ describe('SampleWorkbenchPage clarity controls', () => {
     const actions = container.querySelector('.desk-head-actions')
     expect(actions).toContainElement(screen.getByRole('button', { name: '上传混装资料包' }))
     expect(actions).toHaveTextContent('更换抽样清单')
+  })
+
+  it('shows one concise next action instead of the duplicated process list', async () => {
+    const noPeriodJob = {
+      ...job,
+      goal_ids: ['gospd01020'],
+      plan: { ...job.plan, goal_ids: ['gospd01020'] },
+    }
+    const { container } = render(
+      <SampleWorkbenchPage job={noPeriodJob} onJob={vi.fn()} onGo={vi.fn()} />,
+    )
+
+    expect(await screen.findByText('上传凭证（可一次多笔）')).toBeInTheDocument()
+    expect(screen.queryByText('查看当前处理说明')).not.toBeInTheDocument()
+    const card = screen.getByRole('region', { name: '下一步' })
+    expect(within(card).getByText('上传凭证（可一次多笔）')).toBeInTheDocument()
+    expect(within(card).queryByRole('list')).not.toBeInTheDocument()
+    expect(within(card).getAllByRole('button')).toHaveLength(1)
+    expect(container.querySelectorAll('.btn.primary')).toHaveLength(1)
   })
 })

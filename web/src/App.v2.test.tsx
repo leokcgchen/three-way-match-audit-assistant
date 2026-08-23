@@ -8,7 +8,8 @@ const job = {
     goal_ids: ['gospd01030'], goals: [], required_steps: [], step_labels: [],
     required_dimensions: [], workbook_sheets: [], skipped_steps: [],
   },
-  classified: [], fields_confirmed: false, active_step: 'sample_desk',
+  classified: [{ file_name: 'invoice.pdf', doc_type: 'invoice' }],
+  fields_confirmed: true, conclusion_confirmed: true, active_step: 'sample_desk',
   sample_population: { business_ids: ['SO25-0001'], count: 1 }, pending_files: [],
 }
 
@@ -33,19 +34,21 @@ import App from './App'
 describe('V2 simplified application journey', () => {
   beforeEach(() => localStorage.clear())
 
-  it('uses four roots to unlock the workbench, exact event queue and export page', async () => {
+  it('uses navigable review stages plus the exact event queue and export page', async () => {
     const user = userEvent.setup()
-    const { container } = render(<App />)
+    render(<App />)
 
     expect(await screen.findByText('异常优先工作台')).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: '主导航' })
-    expect(container.querySelectorAll('.primary-rail-nav > .step-btn.root, .primary-rail-nav > .rail-more > summary.step-btn.root')).toHaveLength(4)
-    expect(within(nav).getByText('更多')).toBeInTheDocument()
+    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getByText('选择底稿目标')).toBeInTheDocument()
+    expect(within(nav).getByText('导出底稿')).toBeInTheDocument()
+    expect(within(nav).queryByText('更多')).not.toBeInTheDocument()
 
     await user.click(within(nav).getByRole('button', { name: /待裁决/ }))
     expect(await screen.findByText('精确事件裁决页')).toBeInTheDocument()
 
-    await user.click(within(nav).getByRole('button', { name: /导出/ }))
+    await user.click(within(nav).getByRole('button', { name: /导出底稿/ }))
     expect(await screen.findByText('单一导出操作页')).toBeInTheDocument()
   })
 })

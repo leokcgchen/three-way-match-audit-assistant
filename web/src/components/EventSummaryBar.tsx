@@ -24,7 +24,7 @@ export function EventSummaryBar({ summary, busy = false, onPrimary }: Props) {
       </p>
       <button
         type="button"
-        className="btn primary event-summary-primary"
+        className={`btn${summary.open > 0 ? ' primary' : ''} event-summary-primary`}
         disabled={busy}
         onClick={onPrimary}
       >

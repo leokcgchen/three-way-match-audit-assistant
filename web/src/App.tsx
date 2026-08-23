@@ -17,6 +17,7 @@ import { packetNeedsReview } from './lib/workflowGuide'
 import { invalidateChainsCache, listChainsCached } from './lib/chainsCache'
 import { invalidateConclusionTraceCache } from './lib/conclusionTraceCache'
 import { emptyDeskProgress, progressFromRows, type DeskProgress } from './lib/deskLights'
+import { buildReviewStageNav } from './lib/reviewStageNav'
 import './styles.css'
 
 const STEP_TIP: Record<string, string> = {
@@ -30,19 +31,6 @@ const STEP_TIP: Record<string, string> = {
   workbook_export: '按目标生成 Excel 审阅底稿。',
   hard_cases: '已处理过的识别难点备忘，供演示讲解。',
   prompts: '只读查看系统提示词，供调试，不参与审阅。',
-}
-
-const STEP_META: Record<string, string> = {
-  goals: '底稿目标',
-  sample_desk: '工作台',
-  upload_ocr: '上传凭证',
-  packet_unpack: '拆包分笔',
-  field_confirm: '人工核对',
-  conclusion_gate5: '确认结论',
-  event_review: '待裁决',
-  workbook_export: '导出底稿',
-  hard_cases: '识难录',
-  prompts: '提示词工程',
 }
 
 type JobListItem = {
@@ -233,8 +221,10 @@ export default function App() {
     }
   }
 
-  const hasGoals = (job?.goal_ids?.length || 0) > 0
-  const goalLabels = (job?.plan?.goals || []).map((g) => g.label).filter(Boolean)
+  const reviewStages = useMemo(
+    () => (job ? buildReviewStageNav(job, step) : []),
+    [job, step],
+  )
 
   const goStep = async (stepId: string) => {
     // 导出门禁/旧配方可能仍抛引擎步名：映射到壳层已有页面，避免「未知步骤」空白
@@ -568,87 +558,43 @@ export default function App() {
             </button>
           </div>
 
-          {!hasGoals && (
-            <div className="rail-section">
-              <div className="rail-label">目标</div>
+          <div className="rail-branch open">
+            <div className="rail-label">审阅</div>
+            <nav className="primary-rail-nav" aria-label="主导航">
+              {reviewStages.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`step-btn review-stage is-${item.state}${item.state === 'current' ? ' active' : ''}`}
+                  disabled={item.state === 'locked'}
+                  onClick={() => goStep(item.step)}
+                  aria-current={item.state === 'current' ? 'step' : undefined}
+                  data-tip={STEP_TIP[item.step]}
+                >
+                  <span className="step-text">{item.label}</span>
+                  {item.state === 'done' && <span className="stage-state" aria-hidden>✓</span>}
+                </button>
+              ))}
               <button
                 type="button"
-                className={`step-btn root${step === 'goals' ? ' active' : ''}`}
-                onClick={() => goStep('goals')}
-                data-tip={STEP_TIP.goals}
+                className={`step-btn root${step === 'event_review' ? ' active' : ''}`}
+                onClick={() => goStep('event_review')}
+                aria-current={step === 'event_review' ? 'page' : undefined}
               >
-                <span className="idx">目</span>
-                {STEP_META.goals}
+                <span className="step-text">待裁决</span>
               </button>
-            </div>
-          )}
-
-          <div className={`rail-branch${hasGoals ? ' open' : ''}`}>
-            <div className="rail-label">{hasGoals ? '审阅' : '流程步骤'}</div>
-            {!hasGoals && (
-              <div className="rail-empty">先确认底稿目标，再进入工作台</div>
-            )}
-            {hasGoals && (
-              <nav className="primary-rail-nav" aria-label="主导航">
-                <button
-                  type="button"
-                  className={`step-btn root${step === 'sample_desk' ? ' active' : ''}`}
-                  onClick={() => goStep('sample_desk')}
-                  aria-current={step === 'sample_desk' ? 'page' : undefined}
-                >
-                  <span className="idx">台</span>
-                  <span className="step-text">工作台</span>
-                </button>
-                <button
-                  type="button"
-                  className={`step-btn root${step === 'event_review' ? ' active' : ''}`}
-                  onClick={() => goStep('event_review')}
-                  aria-current={step === 'event_review' ? 'page' : undefined}
-                >
-                  <span className="idx">裁</span>
-                  <span className="step-text">待裁决</span>
-                </button>
-                <button
-                  type="button"
-                  className={`step-btn root${step === 'workbook_export' ? ' active' : ''}`}
-                  onClick={() => goStep('workbook_export')}
-                  aria-current={step === 'workbook_export' ? 'page' : undefined}
-                >
-                  <span className="idx">出</span>
-                  <span className="step-text">导出</span>
-                </button>
-                <details className="rail-more">
-                  <summary className="step-btn root">
-                    <span className="idx">…</span>
-                    <span className="step-text">更多</span>
-                  </summary>
-                  <div className="rail-more-menu">
-                    <button type="button" className="step-btn child" onClick={() => goStep('goals')}>
-                      审阅设置
-                    </button>
-                    {job && packetNeedsReview(job) ? (
-                      <button
-                        type="button"
-                        className="step-btn child"
-                        onClick={() => goStep('packet_unpack')}
-                      >
-                        资料整理
-                      </button>
-                    ) : null}
-                    <button type="button" className="step-btn child" onClick={() => goStep('hard_cases')}>
-                      识别难点记录
-                    </button>
-                    <button type="button" className="step-btn child" onClick={() => goStep('prompts')}>
-                      AI 设置
-                    </button>
-                    <div className="rail-current-goal">
-                      当前目标：{(goalLabels.length ? goalLabels : job?.goal_ids || []).join('、')}
-                    </div>
-                  </div>
-                </details>
-              </nav>
-            )}
+            </nav>
           </div>
+
+          <section className="rail-section rail-tools" aria-label="高级工具">
+            <div className="rail-label">高级工具</div>
+            <button type="button" className="step-btn child" onClick={() => goStep('hard_cases')}>
+              识难录
+            </button>
+            <button type="button" className="step-btn child" onClick={() => goStep('prompts')}>
+              提示词工程
+            </button>
+          </section>
 
           {err && (
             <p className="err" style={{ padding: 8 }}>

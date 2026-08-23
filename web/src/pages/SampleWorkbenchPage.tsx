@@ -45,6 +45,11 @@ function threeWayCardStatus(job: Job): string {
   })
 }
 
+function shortGuideDetail(detail: string): string {
+  const firstSentence = detail.split('。')[0]?.trim()
+  return firstSentence ? `${firstSentence}。` : detail
+}
+
 export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
   const [busy, setBusy] = useState<
     | RunKind
@@ -695,60 +700,51 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
         onPrimary={handleEventPrimary}
       />
 
-      <details className="desk-command desk-command-secondary">
-        <summary>查看当前处理说明</summary>
-        <div className="desk-command-main">
-          <span className="desk-command-kicker">下一步</span>
-          <strong className="desk-command-title">{guide.headline}</strong>
-          <span className="desk-command-detail">{guide.detail}</span>
+      <section className="desk-next-action" aria-label="下一步">
+        <div className="desk-next-copy">
+          <span className="desk-next-kicker">下一步</span>
+          <strong>{guide.headline}</strong>
+          <span>{shortGuideDetail(guide.detail)}</span>
           {guide.sweepPending && guide.sweepPending.length > 0 && (
             <span className="hint">待办 {guide.sweepPending.join('、')}</span>
           )}
         </div>
-        <ol className="hub-progress desk-command-progress">
-          {guide.steps.map((s) => (
-            <li key={s.id} className={`hub-progress-item is-${s.state}`}>
-              <span className="hub-progress-dot" aria-hidden />
-              <span>{s.label}</span>
-            </li>
-          ))}
-        </ol>
-        {guide.action.kind !== 'none' && (
-          <span className="tip-anchor" data-tip={guideCtaTip(guide)}>
-            <button
-              type="button"
-              className="btn compact desk-command-cta"
-              disabled={busy !== null}
-              onClick={() => void doAction(guide.action)}
-            >
-              {busy ? '处理中…' : guide.ctaLabel}
-            </button>
-          </span>
-        )}
-        {needsPeriodEnd && (
-          <div className="desk-period">
-            <label className="hint" htmlFor="desk-period-end">
-              期末
-            </label>
-            <input
-              id="desk-period-end"
-              type="date"
-              value={periodDraft}
-              onChange={(e) => setPeriodDraft(e.target.value)}
-              disabled={busy !== null}
-            />
-            <button
-              type="button"
-              className="btn compact"
-              disabled={busy !== null || periodDraft === String(job.period_end || '')}
-              onClick={() => void savePeriodEnd()}
-            >
-              保存
-            </button>
-            {!job.period_end && <span className="hint compact-err">必填</span>}
+        <div className="desk-next-controls">
+          {needsPeriodEnd && (
+            <div className="desk-period">
+              <label className="hint" htmlFor="desk-period-end">期末</label>
+              <input
+                id="desk-period-end"
+                type="date"
+                value={periodDraft}
+                onChange={(e) => setPeriodDraft(e.target.value)}
+                disabled={busy !== null}
+              />
+              <button
+                type="button"
+                className="btn compact"
+                disabled={busy !== null || periodDraft === String(job.period_end || '')}
+                onClick={() => void savePeriodEnd()}
+              >
+                保存
+              </button>
+              {!job.period_end && <span className="hint compact-err">必填</span>}
+            </div>
+          )}
+          {guide.action.kind !== 'none' && (
+            <span className="tip-anchor" data-tip={guideCtaTip(guide)}>
+              <button
+                type="button"
+                className={`btn${eventSummary.open === 0 ? ' primary' : ''} desk-next-cta`}
+                disabled={busy !== null}
+                onClick={() => void doAction(guide.action)}
+              >
+                {busy ? '处理中…' : guide.ctaLabel}
+              </button>
+            </span>
+          )}
           </div>
-        )}
-      </details>
+      </section>
 
       {(err || msg) && (
         <div className="desk-flash">
