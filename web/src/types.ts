@@ -79,6 +79,75 @@ export type AdvisoryCandidate = {
   note?: string
 }
 
+export type ReviewEventType =
+  | 'MISSING_DOCUMENT'
+  | 'LOW_CONFIDENCE'
+  | 'LEDGER_MISMATCH'
+  | 'RELATIONSHIP_AMBIGUITY'
+  | 'RULE_CONFLICT'
+  | 'AUDIT_TEST_FAILED'
+  | 'PROVENANCE_GAP'
+  | 'QUALITY_SAMPLE'
+
+export type ReviewEventSeverity = 'BLOCKING' | 'REVIEW' | 'SAMPLE'
+export type ReviewEventState = 'OPEN' | 'RESOLVED'
+export type ReviewDecision =
+  | 'ACCEPT_AI'
+  | 'OVERRIDE'
+  | 'MANUAL_VALUE'
+  | 'AUDIT_FAIL'
+  | 'DOCUMENT_ISSUE'
+
+export type ReviewEvent = {
+  event_id: string
+  chain_id: string
+  event_type: ReviewEventType
+  severity: ReviewEventSeverity
+  state: ReviewEventState
+  title: string
+  reason: string
+  evidence: Record<string, unknown>
+  ledger_value: unknown
+  observed_value: unknown
+  ai_suggestion: unknown
+  confidence: number | null
+  action_kind:
+    | 'UPLOAD_EVIDENCE'
+    | 'REVIEW_FIELD'
+    | 'DECIDE_ADVISORY'
+    | 'DECIDE_FINDING'
+    | 'REVIEW_EVIDENCE'
+    | 'REVIEW_SAMPLE'
+  action_step: string
+  source_ref: string
+  invalidates: string[]
+  resolved_at?: string
+  operator?: string
+  decision?: ReviewDecision
+  decision_reason?: string
+}
+
+export type ReviewEventSummary = {
+  open: number
+  blocking: number
+  missing: number
+  review: number
+  sample: number
+  passed: number
+}
+
+export type ReviewDecisionRequest = {
+  decision: ReviewDecision
+  value?: unknown
+  reason?: string
+  operator?: string
+}
+
+export type ReviewEventsResponse = {
+  events: ReviewEvent[]
+  summary: ReviewEventSummary
+}
+
 export type PacketUnit = {
   unit_id: string
   source_file: string
@@ -230,6 +299,7 @@ export type Job = {
   packet_run?: PacketRun | null
   packet_units?: PacketUnit[]
   packet_confirmed?: boolean
+  review_event_decisions?: Record<string, Record<string, unknown>>
 }
 
 export type FieldPlanSlot = {

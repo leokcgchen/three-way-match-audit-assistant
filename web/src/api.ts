@@ -2,6 +2,8 @@ import type {
   CoverageMap,
   Job,
   PromptCatalog,
+  ReviewDecisionRequest,
+  ReviewEventsResponse,
   WorkpaperGoal,
   WorkflowPlan,
 } from './types'
@@ -145,6 +147,10 @@ export type ChainInfo = {
     filled?: boolean
     source_types?: string[]
   }>
+  event_count?: number
+  blocking_event_count?: number
+  missing_doc_types?: string[]
+  auto_passed?: boolean
 }
 
 export type DeskLights = {
@@ -257,6 +263,31 @@ export const api = {
       body: JSON.stringify({ title }),
     }),
   getJob: (jobId: string) => req<Job>(`/api/v1/workflow/jobs/${jobId}`),
+  listReviewEvents: (
+    jobId: string,
+    options?: { state?: 'OPEN' | 'RESOLVED' | 'ALL'; includePassed?: boolean },
+  ) => {
+    const qs = new URLSearchParams()
+    if (options?.state) qs.set('state', options.state)
+    if (options?.includePassed) qs.set('include_passed', 'true')
+    const query = qs.toString() ? `?${qs.toString()}` : ''
+    return req<ReviewEventsResponse>(
+      `/api/v1/workflow/jobs/${jobId}/events${query}`,
+    )
+  },
+  decideReviewEvent: (
+    jobId: string,
+    eventId: string,
+    body: ReviewDecisionRequest,
+  ) =>
+    req<{
+      decision: Record<string, unknown>
+      audit_event: Record<string, unknown>
+      job: Job
+    }>(
+      `/api/v1/workflow/jobs/${jobId}/events/${encodeURIComponent(eventId)}/decision`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   setGoals: (
     jobId: string,
     goal_ids: string[],
