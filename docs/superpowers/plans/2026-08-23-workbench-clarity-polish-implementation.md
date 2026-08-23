@@ -227,6 +227,17 @@ expect(buildReviewStageNav(emptyJob, 'goals')).toEqual([
 
 Add a populated-job case verifying earlier stages are `done`, the current stage is `current`, the next stage is `available`, and later stages remain `locked`.
 
+Add shell-navigation assertions that make the sidebar language and hierarchy explicit:
+
+```tsx
+expect(screen.getByText('高级工具')).toBeInTheDocument()
+expect(screen.getByRole('button', { name: '识难录' })).toBeInTheDocument()
+expect(screen.getByRole('button', { name: '提示词工程' })).toBeInTheDocument()
+expect(screen.queryByText('更多')).not.toBeInTheDocument()
+expect(screen.queryByText('审阅设置')).not.toBeInTheDocument()
+expect(container.querySelectorAll('.rail .idx')).toHaveLength(0)
+```
+
 - [ ] **Step 2: Run and confirm failure**
 
 Run:
@@ -252,7 +263,11 @@ Build `JourneyMark` from persisted job facts: selected goals, sample population,
 
 - [ ] **Step 4: Render stage navigation in App**
 
-Under the `审阅` label, render six buttons from `buildReviewStageNav(job, step)`. Buttons in `locked` state use `disabled`; current uses `aria-current="step"`; done receives a textual `✓` indicator. Keep `待裁决` as a separate root button below the stage list and keep `更多` for settings/tools. Remove the former standalone `工作台` and `导出` roots because those routes now exist in the six-stage list.
+Under the `审阅` label, render six buttons from `buildReviewStageNav(job, step)`. Buttons in `locked` state use `disabled`; current uses `aria-current="step"`; done receives a textual `✓` indicator. Keep `待裁决` as a separate root button below the stage list. Remove the former standalone `工作台` and `导出` roots because those routes now exist in the six-stage list.
+
+Delete the opaque `更多` group and the standalone `审阅设置` entry. Restore the pre-V2 advanced-tool hierarchy as a separate `高级工具` group containing the original complete labels `识难录` and `提示词工程`. The goal-setting route remains available through the first review-stage button, `选择底稿目标`.
+
+Do not render `.idx` or any other single-character logo before left-rail labels. This applies to the six stages, `待裁决`, and both advanced-tool entries; retain only full function names plus necessary textual state marks.
 
 - [ ] **Step 5: Verify navigation tests and type check**
 
@@ -313,6 +328,8 @@ At 768px, 1024px, 1202px and 1440px verify:
 - each colored count shows the approved full tooltip by mouse and keyboard focus;
 - the main area shows one next-action card and no six-step duplicate;
 - six left stages align vertically; completed/current/available/locked states are distinguishable without relying only on color;
+- `高级工具` is independently visible and expands to the full original labels `识难录` and `提示词工程`;
+- neither `更多` nor `审阅设置` appears, and no left-rail button has a standalone single-character logo;
 - no horizontal overflow or clipped labels.
 
 - [ ] **Step 4: Repository checks and commit any QA-only fix**
@@ -336,6 +353,8 @@ git commit -m "fix: polish responsive audit navigation"
 - Colored rail toggle: Task 1.
 - Dense process module replaced with one next action: Task 2.
 - Six clickable left stages with completion/current/locked states: Task 3.
+- Explicit `高级工具` hierarchy, restored tool labels, and removal of `更多`/`审阅设置`: Task 3.
+- Removal of every standalone single-character left-rail logo: Task 3.
 - Top progress remains numeric and backend facts remain unchanged: Tasks 3-4.
 - Keyboard, responsive and one-primary-action acceptance: Tasks 1-4.
 - No placeholders, undefined interfaces or unassigned spec requirements remain.
