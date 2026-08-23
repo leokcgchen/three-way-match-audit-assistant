@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import type { Job } from '../types'
+import type { Job, ReviewEvent, ReviewEventSummary } from '../types'
 import { SampleDeskList } from '../components/SampleDeskList'
+import { EventSummaryBar } from '../components/EventSummaryBar'
 import type { ChainInfo, DeskLights } from '../api'
 import { activeSample, isGospdJob } from '../lib/chainDocs'
 import { resultOverallStatus, threeWayCutoffCardStatus } from '../lib/testStatus'
@@ -19,6 +20,7 @@ import {
   emptyDeskProgress,
   progressFromRows,
 } from '../lib/deskLights'
+import { sortReviewEvents } from '../lib/reviewEvents'
 
 type Props = {
   job: Job
@@ -70,6 +72,15 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
   const [deskLights, setDeskLights] = useState<DeskLights | null>(
     () => peekChainsCache(job)?.lights || null,
   )
+  const [reviewEvents, setReviewEvents] = useState<ReviewEvent[]>([])
+  const [eventSummary, setEventSummary] = useState<ReviewEventSummary>({
+    open: 0,
+    blocking: 0,
+    missing: 0,
+    review: 0,
+    sample: 0,
+    passed: 0,
+  })
   const chainIds = useJobChainIds(job)
   const required = job.plan?.required_steps || []
   const autoReviewing = Boolean(job.auto_review_processing)
@@ -447,6 +458,38 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
   }, [job.job_id, job.updated_at, popCount, (job.classified || []).length, pendingDocs])
 
   useEffect(() => {
+    let cancelled = false
+    void api
+      .listReviewEvents(job.job_id, { includePassed: true })
+      .then((result) => {
+        if (cancelled) return
+        setReviewEvents(sortReviewEvents(result.events.filter((row) => row.state === 'OPEN')))
+        setEventSummary(result.summary)
+      })
+      .catch(() => {
+        if (cancelled) return
+        const open = deskRows.reduce((sum, row) => sum + (row.event_count || 0), 0)
+        setEventSummary({
+          open,
+          blocking: deskRows.reduce(
+            (sum, row) => sum + (row.blocking_event_count || 0),
+            0,
+          ),
+          missing: deskRows.filter((row) => (row.missing_doc_types || []).length > 0).length,
+          review: Math.max(0, open - deskRows.reduce(
+            (sum, row) => sum + (row.blocking_event_count || 0),
+            0,
+          )),
+          sample: 0,
+          passed: deskRows.filter((row) => row.auto_passed).length,
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [job.job_id, job.updated_at, deskRows])
+
+  useEffect(() => {
     // 后台 auto_review / 本页 busy 时不要再叠跑一键审阅
     if (busy || autoReviewing || job.ocr_processing) return
     const pending = deskRows.filter((r) => r.reason === 'tests_pending')
@@ -515,6 +558,24 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
     } finally {
       setUploadingId(null)
     }
+  }
+
+  const handleEventPrimary = () => {
+    if (needUnpack) {
+      onGo('packet_unpack')
+      return
+    }
+    const event = reviewEvents[0]
+    if (!event) {
+      onGo('workbook_export')
+      return
+    }
+    const row = deskRows.find((item) => item.chain_id === event.chain_id)
+    if (row) {
+      openSample(row)
+      return
+    }
+    onGo(event.action_step || 'conclusion_gate5')
   }
 
   return (
@@ -629,7 +690,14 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
         </div>
       </section>
 
-      <section className="desk-command" aria-live="polite">
+      <EventSummaryBar
+        summary={eventSummary}
+        busy={busy !== null}
+        onPrimary={handleEventPrimary}
+      />
+
+      <details className="desk-command desk-command-secondary">
+        <summary>查看当前处理说明</summary>
         <div className="desk-command-main">
           <span className="desk-command-kicker">下一步</span>
           <strong className="desk-command-title">{guide.headline}</strong>
@@ -650,7 +718,7 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
           <span className="tip-anchor" data-tip={guideCtaTip(guide)}>
             <button
               type="button"
-              className="btn primary desk-command-cta"
+              className="btn compact desk-command-cta"
               disabled={busy !== null}
               onClick={() => void doAction(guide.action)}
             >
@@ -681,7 +749,7 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
             {!job.period_end && <span className="hint compact-err">必填</span>}
           </div>
         )}
-      </section>
+      </details>
 
       {(err || msg) && (
         <div className="desk-flash">

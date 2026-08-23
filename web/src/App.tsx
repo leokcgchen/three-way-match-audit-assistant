@@ -231,7 +231,6 @@ export default function App() {
   }
 
   const hasGoals = (job?.goal_ids?.length || 0) > 0
-  const requiredSteps = job?.plan?.required_steps || []
   const goalLabels = (job?.plan?.goals || []).map((g) => g.label).filter(Boolean)
 
   const goStep = async (stepId: string) => {
@@ -577,117 +576,71 @@ export default function App() {
           )}
 
           <div className={`rail-branch${hasGoals ? ' open' : ''}`}>
-            <div className="rail-label">{hasGoals ? '审阅枢纽' : '流程步骤'}</div>
+            <div className="rail-label">{hasGoals ? '审阅' : '流程步骤'}</div>
             {!hasGoals && (
               <div className="rail-empty">先确认底稿目标，再进入工作台</div>
             )}
             {hasGoals && (
-              <>
+              <nav className="primary-rail-nav" aria-label="主导航">
                 <button
                   type="button"
-                  className={`goal-parent${step === 'goals' ? ' is-on' : ''}`}
-                  onClick={() => goStep('goals')}
-                  data-tip="查看或改底稿目标。"
-                >
-                  <div className="goal-parent-title">当前目标</div>
-                  <ul className="goal-parent-list">
-                    {(goalLabels.length ? goalLabels : job?.goal_ids || []).map((lab) => (
-                      <li key={lab}>{lab}</li>
-                    ))}
-                  </ul>
-                </button>
-                <button
-                  type="button"
-                  className={`step-btn hub-home${step === 'sample_desk' ? ' active' : ''}`}
+                  className={`step-btn root${step === 'sample_desk' ? ' active' : ''}`}
                   onClick={() => goStep('sample_desk')}
-                  data-tip={STEP_TIP.sample_desk}
+                  aria-current={step === 'sample_desk' ? 'page' : undefined}
                 >
                   <span className="idx">台</span>
-                  <span className="step-text">
-                    {STEP_META.sample_desk}
-                    <span className="hub-tag">中枢</span>
-                  </span>
+                  <span className="step-text">工作台</span>
                 </button>
-                <div className="rail-spokes">
-                  {(['upload_ocr', 'packet_unpack', 'field_confirm'] as const)
-                    .filter(
-                      (sid) =>
-                        sid === 'upload_ocr' ||
-                        (sid === 'packet_unpack' && job && packetNeedsReview(job)) ||
-                        requiredSteps.includes(sid) ||
-                        (sid === 'field_confirm' &&
-                          ((job?.classified || []).length > 0 ||
-                            requiredSteps.includes('relations_gate4') ||
-                            requiredSteps.includes('evidence_match'))),
-                    )
-                    .map((sid) => (
+                <button
+                  type="button"
+                  className={`step-btn root${step === 'conclusion_gate5' ? ' active' : ''}`}
+                  onClick={() => goStep('conclusion_gate5')}
+                  aria-current={step === 'conclusion_gate5' ? 'page' : undefined}
+                >
+                  <span className="idx">裁</span>
+                  <span className="step-text">待裁决</span>
+                </button>
+                <button
+                  type="button"
+                  className={`step-btn root${step === 'workbook_export' ? ' active' : ''}`}
+                  onClick={() => goStep('workbook_export')}
+                  aria-current={step === 'workbook_export' ? 'page' : undefined}
+                >
+                  <span className="idx">出</span>
+                  <span className="step-text">导出</span>
+                </button>
+                <details className="rail-more">
+                  <summary className="step-btn root">
+                    <span className="idx">…</span>
+                    <span className="step-text">更多</span>
+                  </summary>
+                  <div className="rail-more-menu">
+                    <button type="button" className="step-btn child" onClick={() => goStep('goals')}>
+                      审阅设置
+                    </button>
+                    {job && packetNeedsReview(job) ? (
                       <button
-                        key={sid}
                         type="button"
-                        className={`step-btn child${
-                          step === sid ||
-                          (sid === 'field_confirm' &&
-                            (step === 'evidence_match' || step === 'relations_gate4'))
-                            ? ' active'
-                            : ''
-                        }`}
-                        onClick={() => void goStep(sid)}
-                        data-tip={STEP_TIP[sid]}
+                        className="step-btn child"
+                        onClick={() => goStep('packet_unpack')}
                       >
-                        <span className="tree-mark" aria-hidden />
-                        <span className="idx">
-                          {sid === 'field_confirm' ? '核' : sid === 'packet_unpack' ? '拆' : '传'}
-                        </span>
-                        <span className="step-text">{STEP_META[sid] || sid}</span>
+                        资料整理
                       </button>
-                    ))}
-                  <details
-                    className="rail-detail-steps"
-                    open={step === 'conclusion_gate5' || step === 'workbook_export'}
-                  >
-                    <summary className="rail-detail-summary">结论 / 导出</summary>
-                    {(['conclusion_gate5', 'workbook_export'] as const)
-                      .filter((sid) => requiredSteps.includes(sid) || sid === 'workbook_export')
-                      .map((sid) => (
-                        <button
-                          key={sid}
-                          type="button"
-                          className={`step-btn child${step === sid ? ' active' : ''}`}
-                          onClick={() => void goStep(sid)}
-                          data-tip={STEP_TIP[sid]}
-                        >
-                          <span className="tree-mark" aria-hidden />
-                          <span className="idx">{sid === 'workbook_export' ? '出' : '结'}</span>
-                          <span className="step-text">{STEP_META[sid] || sid}</span>
-                        </button>
-                      ))}
-                  </details>
-                </div>
-              </>
+                    ) : null}
+                    <button type="button" className="step-btn child" onClick={() => goStep('hard_cases')}>
+                      识别难点记录
+                    </button>
+                    <button type="button" className="step-btn child" onClick={() => goStep('prompts')}>
+                      AI 设置
+                    </button>
+                    <div className="rail-current-goal">
+                      当前目标：{(goalLabels.length ? goalLabels : job?.goal_ids || []).join('、')}
+                    </div>
+                  </div>
+                </details>
+              </nav>
             )}
           </div>
-
-          <details className="rail-section rail-tools">
-            <summary className="rail-label">高级工具</summary>
-            <button
-              type="button"
-              className={`step-btn root${step === 'hard_cases' ? ' active' : ''}`}
-              onClick={() => goStep('hard_cases')}
-              data-tip={STEP_TIP.hard_cases}
-            >
-              <span className="idx">录</span>
-              {STEP_META.hard_cases}
-            </button>
-            <button
-              type="button"
-              className={`step-btn root${step === 'prompts' ? ' active' : ''}`}
-              onClick={() => goStep('prompts')}
-              data-tip={STEP_TIP.prompts}
-            >
-              <span className="idx">工</span>
-              {STEP_META.prompts}
-            </button>
-          </details>
 
           {err && (
             <p className="err" style={{ padding: 8 }}>

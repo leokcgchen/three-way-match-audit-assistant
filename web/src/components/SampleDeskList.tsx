@@ -66,7 +66,7 @@ function summarizeLights(rows: ChainInfo[], lights?: DeskLights | null): DeskLig
     for (const line of row.request_docs || []) {
       if (!request_docs.includes(line)) request_docs.push(line)
     }
-    for (const miss of row.missing_doc_labels || []) {
+    for (const miss of row.missing_doc_types || row.missing_doc_labels || []) {
       const line = `${row.chain_id}：请提供「${miss}」`
       if (!request_docs.includes(line)) request_docs.push(line)
     }
@@ -152,6 +152,7 @@ export function SampleDeskList({
 }: Props) {
   const [rules, setRules] = useState<MesMatchRule[]>([])
   const [copied, setCopied] = useState(false)
+  const [showPassed, setShowPassed] = useState(false)
   const pendingCount = useMemo(
     () => rows.filter((r) => !isSettled(r)).length,
     [rows],
@@ -195,13 +196,18 @@ export function SampleDeskList({
     return { pendingRows: pending, settledRows: settled }
   }, [sortedRows])
 
+  const visibleRows = useMemo(
+    () => (showPassed ? [...pendingRows, ...settledRows] : pendingRows),
+    [pendingRows, settledRows, showPassed],
+  )
+
   const rowsWithSlots = useMemo(
     () =>
-      sortedRows.map((row) => ({
+      visibleRows.map((row) => ({
         ...row,
         doc_slots: synthesizeSlots(row),
       })),
-    [sortedRows],
+    [visibleRows],
   )
 
   const slotHeaders = useMemo(() => {
@@ -371,6 +377,17 @@ export function SampleDeskList({
       )}
 
       {settledRows.length > 0 && (
+        <button
+          type="button"
+          className="btn compact desk-passed-toggle"
+          aria-expanded={showPassed}
+          onClick={() => setShowPassed((value) => !value)}
+        >
+          {showPassed ? '收起已通过' : `查看已通过 ${settledRows.length} 笔`}
+        </button>
+      )}
+
+      {showPassed && settledRows.length > 0 && (
         <div className="desk-sample-section is-settled">
           <div className="desk-sample-section-title">
             已通过 / 已确认 <span className="hint">{settledRows.length} 笔</span>

@@ -4542,3 +4542,93 @@ code {
   .packet-file-nav h3 { grid-column: 1 / -1; }
   .packet-review-gate { left: 0.7rem; right: 0.7rem; }
 }
+.event-summary-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 20px;
+  align-items: center;
+  margin: 12px 16px;
+  padding: 16px 18px;
+  border: 1px solid #c8d7e8;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.event-summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: #24415f;
+}
+
+.event-summary-metrics .is-blocking {
+  color: #b42318;
+  font-weight: 700;
+}
+
+.event-summary-bar p {
+  grid-column: 1;
+  margin: 0;
+  color: #5f7184;
+}
+
+.event-summary-primary {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 156px;
+}
+
+.desk-command-secondary {
+  margin-inline: 16px;
+}
+
+.desk-command-secondary > summary {
+  cursor: pointer;
+  color: #52677d;
+  font-weight: 600;
+}
+
+.desk-passed-toggle {
+  margin: 8px 0 2px;
+}
+
+.primary-rail-nav {
+  display: grid;
+  gap: 6px;
+}
+
+.rail-more > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.rail-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rail-more-menu {
+  display: grid;
+  gap: 4px;
+  margin: 5px 0 0 12px;
+  padding-left: 10px;
+  border-left: 1px solid #cbd7e5;
+}
+
+.rail-current-goal {
+  padding: 8px;
+  color: #6a7b8e;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 820px) {
+  .event-summary-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .event-summary-primary {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+  }
+}
