@@ -26,9 +26,8 @@ function choicesFor(event: ReviewEvent): Choice[] {
   }
   if (event.action_kind === 'REVIEW_SAMPLE') {
     return [
-      { decision: 'ACCEPT_AI', label: '复核无误' },
-      { decision: 'AUDIT_FAIL', label: '发现真实异常' },
-      { decision: 'DOCUMENT_ISSUE', label: '客户资料问题' },
+      { decision: 'CORRECT', label: '复核无误' },
+      { decision: 'FALSE_NEGATIVE', label: '发现漏判' },
     ]
   }
   return [
@@ -39,7 +38,7 @@ function choicesFor(event: ReviewEvent): Choice[] {
 }
 
 function requiresReason(decision: ReviewDecision | ''): boolean {
-  return ['OVERRIDE', 'AUDIT_FAIL', 'DOCUMENT_ISSUE'].includes(decision)
+  return ['OVERRIDE', 'AUDIT_FAIL', 'DOCUMENT_ISSUE', 'FALSE_NEGATIVE'].includes(decision)
 }
 
 export function EventReviewPage({ job, onJob, onGo }: Props) {

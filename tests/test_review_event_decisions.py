@@ -122,6 +122,51 @@ def test_resolved_unchanged_fact_is_not_projected_as_open_again():
     assert build_review_events(JOB_STORE.get(job["job_id"]) or {}) == []
 
 
+def _quality_sample_job() -> tuple[str, dict]:
+    job = JOB_STORE.create(title="quality-decision")
+    JOB_STORE.update(
+        job["job_id"],
+        quality_sample_selections=[
+            {
+                "selection_id": "qs-1",
+                "chain_id": "SO25-0281",
+                "reason": "随机复核自动通过样本",
+                "source_ref": "quality_sample:v2:SO25-0281",
+            }
+        ],
+    )
+    event = next(
+        row
+        for row in build_review_events(JOB_STORE.get(job["job_id"]) or {})
+        if row["event_type"] == "QUALITY_SAMPLE"
+    )
+    return job["job_id"], event
+
+
+def test_quality_sample_correct_closes_without_changing_audit_result():
+    job_id, event = _quality_sample_job()
+    result = apply_review_decision(
+        job_id, event["event_id"], {"decision": "CORRECT", "operator": "reviewer"}
+    )
+    assert result["decision"]["decision"] == "CORRECT"
+    saved = JOB_STORE.get(job_id) or {}
+    assert saved.get("quality_findings") in (None, [])
+    assert build_review_events(saved) == []
+
+
+def test_quality_sample_false_negative_creates_real_blocking_event():
+    job_id, event = _quality_sample_job()
+    apply_review_decision(
+        job_id,
+        event["event_id"],
+        {"decision": "FALSE_NEGATIVE", "reason": "验收日期与订单不一致"},
+    )
+    events = build_review_events(JOB_STORE.get(job_id) or {})
+    finding = next(row for row in events if row["event_type"] == "QUALITY_FALSE_NEGATIVE")
+    assert finding["severity"] == "BLOCKING"
+    assert "验收日期" in finding["reason"]
+
+
 @pytest.mark.parametrize("decision", ["OVERRIDE", "AUDIT_FAIL", "DOCUMENT_ISSUE"])
 def test_consequential_decisions_require_reason(decision: str):
     job_id, event = _advisory_job()

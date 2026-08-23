@@ -88,6 +88,7 @@ export type ReviewEventType =
   | 'AUDIT_TEST_FAILED'
   | 'PROVENANCE_GAP'
   | 'QUALITY_SAMPLE'
+  | 'QUALITY_FALSE_NEGATIVE'
 
 export type ReviewEventSeverity = 'BLOCKING' | 'REVIEW' | 'SAMPLE'
 export type ReviewEventState = 'OPEN' | 'RESOLVED'
@@ -97,6 +98,8 @@ export type ReviewDecision =
   | 'MANUAL_VALUE'
   | 'AUDIT_FAIL'
   | 'DOCUMENT_ISSUE'
+  | 'CORRECT'
+  | 'FALSE_NEGATIVE'
 
 export type ReviewEvent = {
   event_id: string

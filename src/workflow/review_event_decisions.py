@@ -11,13 +11,20 @@ from src.workflow.job_store import JOB_STORE
 from src.workflow.review_events import build_review_events
 
 
-REASON_REQUIRED = {"OVERRIDE", "AUDIT_FAIL", "DOCUMENT_ISSUE"}
+REASON_REQUIRED = {"OVERRIDE", "AUDIT_FAIL", "DOCUMENT_ISSUE", "FALSE_NEGATIVE"}
 SUPPORTED_BY_ACTION = {
     "DECIDE_ADVISORY": {"ACCEPT_AI", "OVERRIDE", "MANUAL_VALUE"},
     "REVIEW_FIELD": {"ACCEPT_AI", "OVERRIDE", "MANUAL_VALUE"},
     "DECIDE_FINDING": {"AUDIT_FAIL", "DOCUMENT_ISSUE"},
     "REVIEW_EVIDENCE": {"DOCUMENT_ISSUE"},
-    "REVIEW_SAMPLE": {"ACCEPT_AI", "AUDIT_FAIL", "DOCUMENT_ISSUE"},
+    "REVIEW_SAMPLE": {
+        "CORRECT",
+        "FALSE_NEGATIVE",
+        # Backward-compatible aliases used by pre-V2 clients.
+        "ACCEPT_AI",
+        "AUDIT_FAIL",
+        "DOCUMENT_ISSUE",
+    },
 }
 
 
@@ -168,6 +175,26 @@ def apply_review_decision(
             replay = _apply_manual_value(job_id, event, decision.get("value"))
     elif choice in {"OVERRIDE", "MANUAL_VALUE"} and manual_value_provided:
         replay = _apply_manual_value(job_id, event, decision.get("value"))
+    elif event.get("action_kind") == "REVIEW_SAMPLE" and choice in {
+        "FALSE_NEGATIVE",
+        "AUDIT_FAIL",
+    }:
+        current = JOB_STORE.get(job_id) or {}
+        findings = deepcopy(current.get("quality_findings") or [])
+        findings.append(
+            {
+                "finding_id": f"qf:{event_id}",
+                "sample_event_id": event_id,
+                "chain_id": event.get("chain_id"),
+                "reason": reason,
+                "operator": operator,
+                "found_at": _now(),
+                "resolved": False,
+            }
+        )
+        JOB_STORE.update(job_id, quality_findings=findings)
+        expanded = JOB_STORE.invalidate_by_targets(job_id, ["gate5", "workbook"])
+        replay = {"expanded_invalidates": expanded, "replayed": []}
     elif event.get("invalidates"):
         expanded = JOB_STORE.invalidate_by_targets(job_id, list(event.get("invalidates") or []))
         replay = {"expanded_invalidates": expanded, "replayed": []}

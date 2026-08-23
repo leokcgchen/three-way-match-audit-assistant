@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     # Phase 2：候选关系 / 重复号检测（默认开启）
     ENABLE_RELATION_CANDIDATES: str = "1"
     ENABLE_DUPLICATE_DETECTION: str = "1"
+    # V2 自动通过质量复核：风险抽样 + 稳定随机抽样
+    QUALITY_RISK_SAMPLE_RATE: float = 0.10
+    QUALITY_RANDOM_SAMPLE_RATE: float = 0.05
+    QUALITY_SAMPLE_SEED: str = "v2"
     # OCR 前 L1 几何预处理（方向/纠偏/拉平；白页直通）。0=关
     AUDIT_IMAGE_PREPROCESS: str = "1"
     # Paddle 方向模型（纯英文路径）；空则仅 deskew+warp

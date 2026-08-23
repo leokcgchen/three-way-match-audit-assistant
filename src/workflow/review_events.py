@@ -347,6 +347,30 @@ def _quality_sample_events(job: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _quality_finding_events(job: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for index, finding in enumerate(job.get("quality_findings") or []):
+        if not isinstance(finding, dict) or finding.get("resolved"):
+            continue
+        finding_id = str(finding.get("finding_id") or index)
+        out.append(
+            _event(
+                job,
+                chain_id=str(finding.get("chain_id") or ""),
+                event_type="QUALITY_FALSE_NEGATIVE",
+                severity="BLOCKING",
+                title="质量抽样发现漏判",
+                reason=str(finding.get("reason") or "自动通过样本发现真实异常。"),
+                action_kind="DECIDE_FINDING",
+                action_step="event_review",
+                source_ref=f"quality_finding:{finding_id}",
+                evidence=dict(finding),
+                invalidates=["gate5", "workbook"],
+            )
+        )
+    return out
+
+
 def _deduplicate(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -403,6 +427,7 @@ def build_review_events(job: dict[str, Any]) -> list[dict[str, Any]]:
     events.extend(_rule_conflict_events(job))
     events.extend(_ocr_issue_events(job))
     events.extend(_quality_sample_events(job))
+    events.extend(_quality_finding_events(job))
     return [event for event in _deduplicate(events) if not _same_resolved_fact(job, event)]
 
 

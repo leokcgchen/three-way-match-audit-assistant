@@ -303,7 +303,13 @@ class DuplicateOverrideBody(BaseModel):
 
 class ReviewEventDecisionBody(BaseModel):
     decision: Literal[
-        "ACCEPT_AI", "OVERRIDE", "MANUAL_VALUE", "AUDIT_FAIL", "DOCUMENT_ISSUE"
+        "ACCEPT_AI",
+        "OVERRIDE",
+        "MANUAL_VALUE",
+        "AUDIT_FAIL",
+        "DOCUMENT_ISSUE",
+        "CORRECT",
+        "FALSE_NEGATIVE",
     ]
     value: Any = None
     reason: str = ""
@@ -327,6 +333,18 @@ def list_review_events(
     from src.workflow.review_events import build_review_events, review_event_summary
 
     job = _job_or_404(job_id)
+    if "quality_sample_selections" not in job:
+        from config.settings import settings
+        from src.workflow.quality_sampling import build_quality_sample_selections
+
+        selections = build_quality_sample_selections(
+            job,
+            risk_rate=settings.QUALITY_RISK_SAMPLE_RATE,
+            random_rate=settings.QUALITY_RANDOM_SAMPLE_RATE,
+            seed=settings.QUALITY_SAMPLE_SEED,
+        )
+        JOB_STORE.update(job_id, quality_sample_selections=selections)
+        job = _job_or_404(job_id)
     events = build_review_events(job)
     if include_passed:
         events.extend(resolved_review_events(job))
