@@ -224,6 +224,8 @@ export type Job = {
     packet_kind?: string
     page_count?: number
     from_packet?: boolean
+    declared_business_ids?: string[]
+    upload_source?: 'business_row' | 'mixed_packet'
   }>
   packet_run?: PacketRun | null
   packet_units?: PacketUnit[]

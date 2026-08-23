@@ -216,6 +216,7 @@ def analyze_pending_packets(
             "page_count": n,
             "sha256": file_sha256(path),
             "declared_mode": (file_modes or {}).get(name),
+            "declared_business_ids": list(item.get("declared_business_ids") or []),
         }
         files_meta.append(meta)
         if kind == STANDARD:
@@ -272,9 +273,15 @@ def analyze_pending_packets(
         filename_ids=filename_ids,
     )
     warnings.extend(cluster_warnings)
+    declared_by_file = {
+        str(item.get("file_name") or ""): list(item.get("declared_business_ids") or [])
+        for item in pending
+    }
     for item in clustered:
-        linked = with_business_ids(item, [item.get("chain_id")])
+        declared_ids = declared_by_file.get(str(item.get("source_file") or "")) or []
+        linked = with_business_ids(item, declared_ids or [item.get("chain_id")])
         item.update(linked)
+        item["business_binding_source"] = None
         item.pop("text", None)  # 不把全文塞进 job
 
     status = "skipped" if not has_packet else "needs_review"

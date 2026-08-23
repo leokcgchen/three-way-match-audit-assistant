@@ -1283,16 +1283,51 @@ async def upload_documents(
     # 默认仅落盘入队，需前端点「开始处理」再 OCR
     process: bool = Form(False),
     slot_hints: str = Form(""),
+    business_hints: str = Form(""),
 ) -> dict[str, Any]:
     from src.workflow.pipeline import save_bytes_to_workdir
 
-    _job_or_404(job_id)
+    job = _job_or_404(job_id)
     hints: dict[str, str] = {}
     if slot_hints.strip():
         try:
             hints = json.loads(slot_hints)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="slot_hints 不是合法 JSON") from exc
+    business_map: dict[str, list[str]] = {}
+    if business_hints.strip():
+        try:
+            raw_business_map = json.loads(business_hints)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="business_hints 不是合法 JSON") from exc
+        if not isinstance(raw_business_map, dict):
+            raise HTTPException(status_code=400, detail="business_hints 必须是文件名到业务号数组的映射")
+        population = job.get("sample_population") or {}
+        population_ids = [str(x) for x in (population.get("business_ids") or []) if str(x).strip()]
+        if not population_ids:
+            raise HTTPException(status_code=400, detail="请先上传抽样清单，再从业务行上传文件")
+        from src.legacy_ocr.ledger_parser import compact_biz_id, normalize_biz_id
+
+        canonical = {compact_biz_id(normalize_biz_id(x)): normalize_biz_id(x) for x in population_ids}
+        unknown: list[str] = []
+        for raw_name, raw_ids in raw_business_map.items():
+            if not isinstance(raw_name, str) or not isinstance(raw_ids, list):
+                raise HTTPException(status_code=400, detail="business_hints 必须是文件名到业务号数组的映射")
+            resolved: list[str] = []
+            for raw_id in raw_ids:
+                normalized = normalize_biz_id(raw_id)
+                matched = canonical.get(compact_biz_id(normalized))
+                if not matched:
+                    unknown.append(str(raw_id))
+                    continue
+                if matched not in resolved:
+                    resolved.append(matched)
+            business_map[raw_name] = resolved
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail="业务号不在当前抽样清单中: " + "、".join(dict.fromkeys(unknown)),
+            )
 
     specs: list[dict[str, Any]] = []
     new_pending: list[dict[str, Any]] = []
@@ -1303,8 +1338,16 @@ async def upload_documents(
         content = await upload.read()
         filename = upload.filename or "upload.bin"
         slot = hints.get(filename, "")
+        declared_business_ids = list(business_map.get(filename) or [])
         path = save_bytes_to_workdir(workdir, filename, content)
-        specs.append({"filename": filename, "content": content, "slot_hint": slot})
+        specs.append(
+            {
+                "filename": filename,
+                "content": content,
+                "slot_hint": slot,
+                "declared_business_ids": declared_business_ids,
+            }
+        )
         light = light_classify_file(filename, str(path), slot_hint=slot)
         new_pending.append(
             {
@@ -1315,10 +1358,12 @@ async def upload_documents(
                 "doc_type": light.get("doc_type") or "other",
                 "doc_type_source": light.get("doc_type_source") or "light",
                 "light_confident": bool(light.get("confident")),
+                "declared_business_ids": declared_business_ids,
+                "upload_source": "business_row" if declared_business_ids else "mixed_packet",
             }
         )
 
-    job = JOB_STORE.get(job_id) or {}
+    job = JOB_STORE.get(job_id) or job
     if process:
         from src.workflow.field_catalog import ensure_field_plan
 
@@ -1370,6 +1415,15 @@ async def upload_documents(
                 "pages": [],
             }
         job = JOB_STORE.update(job_id, **patch)
+    if business_map:
+        append_hitl_event(
+            action="business_row_upload_hint",
+            entity_type="job",
+            entity_id=job_id,
+            before=None,
+            after={"files": business_map, "count": len(new_pending)},
+            reason="从业务仓库行上传，记录可修改的业务预选",
+        )
     return job
 
 
