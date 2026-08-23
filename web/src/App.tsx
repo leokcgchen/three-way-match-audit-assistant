@@ -529,6 +529,7 @@ export default function App() {
               onClick={toggleRail}
               data-tip={railCollapsed ? '展开左侧导航' : '收起左侧导航，放大工作区'}
               aria-expanded={!railCollapsed}
+              aria-label={railCollapsed ? '展开左侧导航' : '收起左侧导航'}
             >
               {railCollapsed ? '»' : '«'}
             </button>

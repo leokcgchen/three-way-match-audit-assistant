@@ -15,11 +15,7 @@ import {
 import { useJobChainIds } from '../lib/useJobChainIds'
 import { confirmLinkagePrimary } from '../lib/confirmLinkage'
 import { listChainsCached, peekChainsCache } from '../lib/chainsCache'
-import {
-  DESK_LIGHT_LEGEND_TIP,
-  emptyDeskProgress,
-  progressFromRows,
-} from '../lib/deskLights'
+import { emptyDeskProgress, progressFromRows } from '../lib/deskLights'
 import { sortReviewEvents } from '../lib/reviewEvents'
 
 type Props = {
@@ -615,32 +611,34 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
             if (files.length) void uploadEvidence(null, files)
           }}
         />
-        <button
-          type="button"
-          className="btn compact"
-          disabled={busy !== null || uploadingId !== null}
-          onClick={() => mixedPacketInputRef.current?.click()}
-        >
-          {uploadingId === '__mixed_packet__' ? '上传中…' : '上传混装资料包'}
-        </button>
-        {popCount > 0 && (
-          <label
+        <div className="desk-head-actions">
+          <button
+            type="button"
             className="btn compact"
-            data-tip="更换抽样清单会重立样本笔，并更新后面测试用的入账日/金额。"
+            disabled={busy !== null || uploadingId !== null}
+            onClick={() => mixedPacketInputRef.current?.click()}
           >
-            更换抽样清单
-            <input
-              type="file"
-              accept=".xlsx,.xlsm"
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                e.target.value = ''
-                if (f) void importLedger(f)
-              }}
-            />
-          </label>
-        )}
+            {uploadingId === '__mixed_packet__' ? '上传中…' : '上传混装资料包'}
+          </button>
+          {popCount > 0 && (
+            <label
+              className="btn compact"
+              data-tip="更换抽样清单会重立样本笔，并更新后面测试用的入账日/金额。"
+            >
+              更换抽样清单
+              <input
+                type="file"
+                accept=".xlsx,.xlsm"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (f) void importLedger(f)
+                }}
+              />
+            </label>
+          )}
+        </div>
       </div>
 
       <section className="desk-kpi" aria-label="全局进度总览">
@@ -671,18 +669,15 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
               : '—'}
           </span>
         </div>
-        <div className="desk-kpi-item" data-tip={DESK_LIGHT_LEGEND_TIP}>
+        <div className="desk-kpi-item">
           <span className="desk-kpi-label">红黄绿</span>
           <strong className="desk-kpi-value desk-kpi-lights">
-            <span className="desk-kpi-dot is-green">{lightKpi.green}</span>
-            <span className="desk-kpi-dot is-yellow">{lightKpi.yellow}</span>
-            <span className="desk-kpi-dot is-red">{lightKpi.red}</span>
+            <span className="desk-kpi-dot is-green" tabIndex={0} aria-label={`绿色 ${lightKpi.green} 笔`} data-tip="绿色：单据齐全、必要字段齐全且规则未发现异常，可以继续或已通过。">{lightKpi.green}</span>
+            <span className="desk-kpi-dot is-yellow" tabIndex={0} aria-label={`黄色 ${lightKpi.yellow} 笔`} data-tip="黄色：文件类型、匹配关系或专业判断仍有疑问，需要审计师人工判断。">{lightKpi.yellow}</span>
+            <span className="desk-kpi-dot is-red" tabIndex={0} aria-label={`红色 ${lightKpi.red} 笔`} data-tip="红色：缺少单据、关键字段缺失、无法归属或规则明确冲突，必须处理。">{lightKpi.red}</span>
+            <span className="desk-kpi-dot is-wait" tabIndex={0} aria-label={`灰色 ${lightKpi.wait} 笔`} data-tip="灰色：凭证尚未上传、识别或测试仍在进行，尚未出灯。">{lightKpi.wait}</span>
           </strong>
-          <span className="desk-kpi-unit">
-            {progressKpi.fail_confirmed > 0
-              ? `红含已确认 ${progressKpi.fail_confirmed} · 灰${lightKpi.wait}`
-              : `绿可继续 · 黄人裁 · 红须处理 · 灰${lightKpi.wait}`}
-          </span>
+          <span className="desk-kpi-unit">悬浮或聚焦数字查看完整含义</span>
         </div>
         <div className="desk-kpi-item desk-kpi-goals">
           <span className="desk-kpi-label">底稿目标</span>

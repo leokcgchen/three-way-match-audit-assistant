@@ -46,6 +46,7 @@ describe('primary navigation', () => {
 
   it('exposes four business roots and hides technical workflow steps', async () => {
     render(<App />)
+    expect(screen.getByRole('button', { name: '收起左侧导航' })).toHaveClass('rail-toggle')
     const nav = await screen.findByRole('navigation', { name: '主导航' })
     expect(within(nav).getByText('工作台')).toBeInTheDocument()
     expect(within(nav).getByText('待裁决')).toBeInTheDocument()

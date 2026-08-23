@@ -557,6 +557,17 @@ a {
   padding-right: 0.45rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
+.rail-toggle:hover,
+.rail-toggle:focus-visible {
+  color: #fff;
+  background: #001a80;
+  border-color: #001a80;
+  box-shadow: var(--focus);
 }
 
 .shell.rail-collapsed .rail {
@@ -2292,6 +2303,19 @@ code {
   padding-bottom: 0.55rem;
   flex-shrink: 0;
 }
+.desk-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+.desk-head-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.25rem;
+  text-align: center;
+}
 .desk-kpi {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2352,6 +2376,14 @@ code {
 }
 .desk-kpi-dot.is-red {
   color: #b42318;
+}
+.desk-kpi-dot.is-wait {
+  color: var(--muted);
+}
+.desk-kpi-dot:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 .desk-kpi-unit {
   font-size: 0.72rem;
