@@ -157,8 +157,8 @@ def _seed_ready_job(*, with_pending: bool = True) -> dict:
     return JOB_STORE.update(jid, **patch)
 
 
-def test_trigger_ingest_then_gate_blocks():
-    """触发入库 → Gate5 被拦。"""
+def test_matching_advisory_is_visible_but_does_not_block_gate5():
+    """匹配类候选作为旁注可见，但按产品口径 A 不阻断 Gate5。"""
     out = ingest_verified_claims(
         [],
         task_type="MATCHING_DISAMBIGUATION",
@@ -183,8 +183,8 @@ def test_trigger_ingest_then_gate_blocks():
     jid = job["job_id"]
     JOB_STORE.update(jid, advisory_candidates=out["store"])
     assert pending_advisory_for_job(JOB_STORE.get(jid))
-    with pytest.raises(ValueError, match="顾问候选"):
-        JOB_STORE.confirm_conclusion(jid)
+    confirmed = JOB_STORE.confirm_conclusion(jid)
+    assert confirmed["conclusion_confirmed"] is True
 
 
 def test_decide_reject_then_confirm_and_fill_gospd(tmp_path: Path, monkeypatch):
@@ -291,8 +291,12 @@ def test_decide_verify_amount_replays_then_official_workbook(
             "cutoff_result": {"测试状态": "PASS"},
         },
     )
-    confirmed = JOB_STORE.confirm_conclusion(jid)
+    confirmed = JOB_STORE.confirm_conclusion(jid, as_fail=True)
     assert confirmed["conclusion_confirmed"] is True
+    assert (
+        confirmed["gospd_sample_results"]["SO25-0281"]["conclusion_disposition"]
+        == "fail"
+    )
 
     paths = build_workbooks_for_job(JOB_STORE.get(jid))
     assert paths

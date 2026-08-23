@@ -292,14 +292,14 @@ def test_reports_dir_config_effective(tmp_dir: Optional[str] = None):
 
 
 def test_human_readable_summary_contains_key_fields():
-    """摘要包含供应商、金额、签收日、入账日、偏差等关键信息。"""
+    """销售摘要包含客户、金额、签收日、入账日、偏差等关键信息。"""
     matcher = ThreeWayMatcher()
     result = matcher.match_and_cutoff(_sample_request(), inprocess=True)
     summary = result.get("human_readable_summary") or result[
         "match_result"
     ].human_readable_summary
     assert summary
-    assert "供应商一致" in summary
+    assert "客户一致" in summary
     assert "金额差异" in summary
     assert "控制权转移日（签收/验收）2026-06-01" in summary
     assert "2026-06-01" in summary  # 应确认/入账

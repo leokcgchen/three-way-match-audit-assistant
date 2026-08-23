@@ -12,7 +12,7 @@ def test_confirm_conclusion_blocks_pending_advisory():
     job = JOB_STORE.create(title="wb-gate")
     jid = job["job_id"]
     cand = new_advisory_candidate(
-        task_type="AMOUNT_GAP_FILL",
+        task_type="FIELD_GAP_FILL",
         payload={"field_name": "quantity", "value": 1},
         evidence={"excerpt": "x"},
         business_id="SO25-0001",

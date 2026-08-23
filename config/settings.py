@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     REQUIRE_MATCHING_CONFIRMED_API: str = "auto"
     REQUIRE_CONCLUSION_CONFIRMED_API: str = "auto"
     # 正式审计模式：禁止 OCR 不可用时注入 Mock 字段；演示/本地可设 AUDIT_ALLOW_OCR_MOCK=1
+    AUDIT_ALLOW_OCR_MOCK: str = "0"
     DEMO_OCR_CACHE: str = "1"
     # HITL 操作人标识（空则回退系统用户名）
     HITL_OPERATOR: str = ""

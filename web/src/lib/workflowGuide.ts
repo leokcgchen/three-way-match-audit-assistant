@@ -6,7 +6,6 @@ import {
   earliestSweepPhase,
   isMultiChainJob,
   listGospdChainIds,
-  sampleForChain,
   type SweepPhase,
 } from './chainProgress'
 import { activeSample, isGospdJob } from './chainDocs'

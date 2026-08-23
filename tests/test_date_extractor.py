@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.utils.date_extractor import (
+    apply_receipt_date_fields,
     pick_receipt_date_from_fields,
     resolve_receipt_dates,
 )
@@ -46,7 +47,11 @@ def test_heuristic_receipt_on_user_sample():
         "记录事项：本单同时记录到货事实及合同约定的3日验收期。"
         "2025年12月30日为实物到货日，2026年01月02日为验收完成 / 期限届满日"
     )
-    fields = extract_fields_heuristically(text)
+    fields = apply_receipt_date_fields(
+        extract_fields_heuristically(text),
+        text,
+        document_type="receipt",
+    )
     assert fields.get("receiptDateForCutoff") == "2026-01-02"
     assert fields.get("deliveryDate") == "2025-12-30"
     assert pick_receipt_date_from_fields(fields) == "2026-01-02"

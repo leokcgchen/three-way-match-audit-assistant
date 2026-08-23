@@ -54,7 +54,6 @@ export function journeyProgressPlan(m: JourneyMark): Array<{
   current: boolean
   blocked?: boolean
 }> {
-  const needMatch = m.needMatch !== false
   const needConclusion = m.needConclusion !== false
   const needExport = m.needExport !== false
   const seq: Array<{ id: string; label: string; ok: boolean; show: boolean }> = [
