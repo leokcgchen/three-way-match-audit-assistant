@@ -41,6 +41,14 @@ def _days_from_period_end(job: dict[str, Any], row: dict[str, Any]) -> int | Non
 
 def _eligible_rows(job: dict[str, Any]) -> list[dict[str, Any]]:
     from src.workflow.sample_desk import build_desk_chains
+    from src.workflow.review_events import build_review_events
+
+    non_sample_event_chains = {
+        str(event.get("chain_id") or "")
+        for event in build_review_events(job)
+        if str(event.get("event_type") or "")
+        not in {"QUALITY_SAMPLE", "QUALITY_FALSE_NEGATIVE"}
+    }
 
     return [
         row
@@ -48,6 +56,7 @@ def _eligible_rows(job: dict[str, Any]) -> list[dict[str, Any]]:
         if row.get("auto_passed") is True
         and not row.get("event_count")
         and str(row.get("chain_id") or "")
+        and str(row.get("chain_id") or "") not in non_sample_event_chains
     ]
 
 

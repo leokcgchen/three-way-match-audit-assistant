@@ -43,6 +43,7 @@ export function UploadPage({ job, onJob, ocrBusy = false, ocrMsg = '', onProcess
   const pending = job.pending_files || []
   const classified = job.classified || []
   const hasPending = pending.length > 0
+  const requiresPacketReview = packetNeedsReview(job)
   const locked = busy !== 'idle' || ocrBusy
   const prog = job.ocr_progress
   const progPct =
@@ -293,23 +294,25 @@ export function UploadPage({ job, onJob, ocrBusy = false, ocrMsg = '', onProcess
               强制重识别
             </button>
           </span>
-          <span
-            className="tip-anchor"
-            data-tip="按底稿目标抽字段并识别；可切到其它页等待。"
-          >
-            <button
-              className="btn primary"
-              disabled={locked || (!hasPending && !classified.length)}
-              onClick={() => void startProcess(false)}
+          {!requiresPacketReview ? (
+            <span
+              className="tip-anchor"
+              data-tip="按底稿目标抽字段并识别；可切到其它页等待。"
             >
-              {ocrBusy ? '处理中…' : `开始处理${hasPending ? `（${pending.length}）` : ''}`}
-            </button>
-          </span>
+              <button
+                className="btn primary"
+                disabled={locked || (!hasPending && !classified.length)}
+                onClick={() => void startProcess(false)}
+              >
+                {ocrBusy ? '处理中…' : `开始处理${hasPending ? `（${pending.length}）` : ''}`}
+              </button>
+            </span>
+          ) : null}
         </div>
       </div>
 
       <div className="panel-body upload-body">
-        {packetNeedsReview(job) && (
+        {requiresPacketReview && (
           <div className="packet-upload-banner">
             <span>待处理里有混装凭证包，识别前须先拆包分笔。</span>
             <span

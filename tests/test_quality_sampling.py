@@ -64,6 +64,18 @@ def test_open_or_failed_chains_are_not_quality_samples():
     assert set(selected) == {"SO25-0001", "SO25-0002"}
 
 
+def test_chain_with_non_desk_review_event_is_not_quality_sampled():
+    job = _job()
+    job["classified"][0].update(
+        ledger_evaluated=True,
+        ledger_match_ok=False,
+        ledger_amount=999,
+    )
+    selected = select_quality_samples(job, risk_rate=1, random_rate=1, seed="v2")
+    assert "SO25-0001" not in selected
+    assert "SO25-0002" in selected
+
+
 def test_selection_records_explain_risk_and_random_routes():
     rows = build_quality_sample_selections(
         _job(), risk_rate=0.5, random_rate=0.5, seed="v2"
@@ -76,10 +88,19 @@ def test_selection_records_explain_risk_and_random_routes():
 
 def test_events_api_materializes_quality_samples_once_for_eligible_chains():
     created = JOB_STORE.create(title="quality-api")
+    client = TestClient(app)
+    before_completion = client.get(
+        f"/api/v1/workflow/jobs/{created['job_id']}/events"
+    )
+    assert before_completion.status_code == 200
+    assert not any(
+        row["event_type"] == "QUALITY_SAMPLE"
+        for row in before_completion.json()["events"]
+    )
+
     patch = _job()
     patch.pop("job_id", None)
     JOB_STORE.update(created["job_id"], **patch)
-    client = TestClient(app)
 
     first = client.get(f"/api/v1/workflow/jobs/{created['job_id']}/events")
     second = client.get(f"/api/v1/workflow/jobs/{created['job_id']}/events")

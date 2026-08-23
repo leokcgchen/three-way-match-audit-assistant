@@ -568,13 +568,16 @@ def build_export_readiness(job: dict[str, Any]) -> dict[str, Any]:
         for event in blocking_events
         for stage_id in stage_ids_by_event.get(str(event.get("event_type") or ""), set())
     }
-    # A review event is the human-facing form of these structural gates. Remove
-    # their duplicate rows and route the auditor through one adjudication queue.
-    stages = [
-        stage
-        for stage in stages
-        if not (stage.get("blocking") and str(stage.get("id") or "") in represented_stage_ids)
-    ]
+    # A review event is the human-facing form of these structural gates. Keep
+    # the legacy stage IDs for API consumers and traceability, but make the
+    # unified event queue the only blocking/counting source.
+    for stage in stages:
+        if stage.get("blocking") and str(stage.get("id") or "") in represented_stage_ids:
+            stage["status"] = "DONE"
+            stage["blocking"] = False
+            stage["represented_by"] = "review_events"
+            stage["action"] = None
+            stage["reason"] = f"由待裁决事项统一处理：{stage.get('reason') or ''}"
     if blocking_events:
         affected = sorted(
             {str(event.get("chain_id") or "") for event in blocking_events if event.get("chain_id")}
