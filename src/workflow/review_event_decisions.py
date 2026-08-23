@@ -152,7 +152,8 @@ def apply_review_decision(
 
     if choice in REASON_REQUIRED and not reason:
         raise ValueError("该裁决必须填写理由")
-    if choice == "MANUAL_VALUE" and "value" not in decision:
+    manual_value_provided = decision.get("value") not in (None, "")
+    if choice == "MANUAL_VALUE" and not manual_value_provided:
         raise ValueError("手工录入必须提供人工值")
     if event.get("event_type") == "MISSING_DOCUMENT":
         raise ValueError("缺件事件只能通过上传补充资料解决，不能直接裁决放行")
@@ -163,9 +164,9 @@ def apply_review_decision(
     replay: dict[str, Any] = {}
     if event.get("action_kind") == "DECIDE_ADVISORY":
         replay = _apply_advisory(job_id, event, choice, reason, operator)
-        if choice in {"OVERRIDE", "MANUAL_VALUE"} and "value" in decision:
+        if choice in {"OVERRIDE", "MANUAL_VALUE"} and manual_value_provided:
             replay = _apply_manual_value(job_id, event, decision.get("value"))
-    elif choice in {"OVERRIDE", "MANUAL_VALUE"} and "value" in decision:
+    elif choice in {"OVERRIDE", "MANUAL_VALUE"} and manual_value_provided:
         replay = _apply_manual_value(job_id, event, decision.get("value"))
     elif event.get("invalidates"):
         expanded = JOB_STORE.invalidate_by_targets(job_id, list(event.get("invalidates") or []))

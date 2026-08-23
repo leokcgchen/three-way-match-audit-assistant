@@ -570,6 +570,10 @@ export function SampleWorkbenchPage({ job, onJob, onGo }: Props) {
       onGo('workbook_export')
       return
     }
+    if (event.event_type !== 'MISSING_DOCUMENT') {
+      onGo('event_review')
+      return
+    }
     const row = deskRows.find((item) => item.chain_id === event.chain_id)
     if (row) {
       openSample(row)

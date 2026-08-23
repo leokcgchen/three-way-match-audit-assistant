@@ -10,6 +10,7 @@ import { HardCasesPage } from './pages/HardCasesPage'
 import { PromptLabPage } from './pages/PromptLabPage'
 import { SampleWorkbenchPage } from './pages/SampleWorkbenchPage'
 import { PacketUnpackPage } from './pages/PacketUnpackPage'
+import { EventReviewPage } from './pages/EventReviewPage'
 import { TipHost } from './components/TipHost'
 import { MastheadProgress } from './components/MastheadProgress'
 import { packetNeedsReview } from './lib/workflowGuide'
@@ -25,6 +26,7 @@ const STEP_TIP: Record<string, string> = {
   packet_unpack: '看切开是否对，改类型并归到业务笔，确认后再识别。',
   field_confirm: '红灯笔对照原件补缺字段。',
   conclusion_gate5: '测试未通过时，看对不上的数据并确认是不通过还是单据问题。',
+  event_review: '只看需要人工判断的异常、缺件和质量抽检。',
   workbook_export: '按目标生成 Excel 审阅底稿。',
   hard_cases: '已处理过的识别难点备忘，供演示讲解。',
   prompts: '只读查看系统提示词，供调试，不参与审阅。',
@@ -37,6 +39,7 @@ const STEP_META: Record<string, string> = {
   packet_unpack: '拆包分笔',
   field_confirm: '人工核对',
   conclusion_gate5: '确认结论',
+  event_review: '待裁决',
   workbook_export: '导出底稿',
   hard_cases: '识难录',
   prompts: '提示词工程',
@@ -426,6 +429,7 @@ export default function App() {
     if (
       step === 'sample_desk' ||
       step === 'conclusion_gate5' ||
+      step === 'event_review' ||
       step === 'upload_ocr' ||
       step === 'packet_unpack' ||
       step === 'field_confirm' ||
@@ -452,6 +456,9 @@ export default function App() {
             >
               <ConclusionPage job={job} onJob={onJobUpdate} onGo={(s) => void goStep(s)} />
             </div>
+          )}
+          {step === 'event_review' && (
+            <EventReviewPage job={job} onJob={onJobUpdate} onGo={(s) => void goStep(s)} />
           )}
           {step === 'upload_ocr' && (
             <UploadPage
@@ -593,9 +600,9 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={`step-btn root${step === 'conclusion_gate5' ? ' active' : ''}`}
-                  onClick={() => goStep('conclusion_gate5')}
-                  aria-current={step === 'conclusion_gate5' ? 'page' : undefined}
+                  className={`step-btn root${step === 'event_review' ? ' active' : ''}`}
+                  onClick={() => goStep('event_review')}
+                  aria-current={step === 'event_review' ? 'page' : undefined}
                 >
                   <span className="idx">裁</span>
                   <span className="step-text">待裁决</span>

@@ -7,13 +7,15 @@ type Props = {
   highlightField?: string | null
   /** 草稿字段值（未保存也可定位） */
   highlightValue?: string | null
+  /** 1-based page number from audit evidence. */
+  page?: number
 }
 
 /**
  * 原件预览：默认用服务端渲染页图（避免 iframe 切 PDF 不刷新）；
  * 选中字段时再请求高亮图。fileName 变化必须立刻丢掉上一张图。
  */
-export function DocPreview({ jobId, fileName, highlightField, highlightValue }: Props) {
+export function DocPreview({ jobId, fileName, highlightField, highlightValue, page = 1 }: Props) {
   const [imgUrl, setImgUrl] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
@@ -66,12 +68,13 @@ export function DocPreview({ jobId, fileName, highlightField, highlightValue }: 
           objectUrl = URL.createObjectURL(blob)
         } else {
           // 无高亮：渲染首页（与取证同源），不依赖浏览器 PDF iframe 缓存
-          const { blob, meta } = await api.previewPage(jobId, fileName, 0)
+          const pageIndex = Math.max(0, page - 1)
+          const { blob, meta } = await api.previewPage(jobId, fileName, pageIndex)
           if (!blob.size) throw new Error('预览图为空')
           objectUrl = URL.createObjectURL(blob)
           setNote(
             meta.page_count > 1
-              ? `原件第 1 / ${meta.page_count} 页（点字段可高亮定位）`
+              ? `原件第 ${pageIndex + 1} / ${meta.page_count} 页（点字段可高亮定位）`
               : '原件预览（点字段可高亮定位）',
           )
         }
@@ -95,7 +98,7 @@ export function DocPreview({ jobId, fileName, highlightField, highlightValue }: 
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [jobId, fileName, highlightField, highlightValue])
+  }, [jobId, fileName, highlightField, highlightValue, page])
 
   return (
     <div key={fileName} className="doc-preview">
