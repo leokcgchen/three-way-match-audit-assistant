@@ -60,6 +60,7 @@ _colleague_share_*/
 # 本地开发工具与视觉设计临时文件
 .cursor/
 .superpowers/
+.worktrees/
 edge-qa-profile/
 .edge-qa*/
 
