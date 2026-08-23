@@ -54,8 +54,8 @@ def test_fail_early() -> None:
     print("test_fail_early: PASS")
 
 
-def test_warning_delayed() -> None:
-    # 无账期：签收 06-01、入账 06-11 → 延迟 → WARNING
+def test_same_period_delayed_is_pass() -> None:
+    # 同月日差：签收 06-01、入账 06-11 → 同期间操作性偏差 → PASS（非跨期）
     data = _post(
         {
             "业务编号": "SO-003",
@@ -64,9 +64,9 @@ def test_warning_delayed() -> None:
             "入账金额": 500,
         }
     )
-    assert data["测试状态"] == "WARNING", data
+    assert data["测试状态"] == "PASS", data
     assert data["应确认日期"] == "2026-06-01", data
-    print("test_warning_delayed: PASS")
+    print("test_same_period_delayed_is_pass: PASS")
 
 
 if __name__ == "__main__":

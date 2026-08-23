@@ -53,3 +53,7 @@ class OcrResult(BaseModel):
     confidence: float = 0.0
     documentType: Optional[str] = None
     source: str = Field(default="unknown", description="paddleocr / heuristic / mock")
+    textBlocks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="OCR 文本块（text/bbox/page），供预览高亮定位",
+    )

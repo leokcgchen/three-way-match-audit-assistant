@@ -1,37 +1,30 @@
-# 合同截止性测试 Agent
+# 抽凭 — 合同合规性审阅 Agent
 
-接收三单系统 JSON，执行截止性测试，并自动追加 GOSPD01010 底稿 CSV。
+主路径：选底稿目标 → 工作台立笔（裁剪序时账）→ 上传凭证 → 缺字段才核对 → 测试不通过才确认结论 → 导出 GOSPD 底稿。
 
 ## 启动
 
 | 用途 | 命令 |
 |------|------|
-| API 服务 | `python run_api.py` 或双击 `start_api.bat` |
-| 调试 UI | `python run_debug_ui.py` 或双击 `start_debug_ui.bat` |
+| **React 工作台** | 双击 `start_workbench.bat`（API :8000 + UI :5173） |
+| 仅 API | `python run_api.py` 或 `start_api.bat` |
 
-- API 文档：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/health
-- 截止性接口：`POST /api/v1/cutoff`
-- 三单联动：`POST /api/v1/three-way-match`
-- OCR 适配：`src/legacy_ocr`（千帆 PaddleOCR + LLM，Key 见 `.env`）
-- 底稿输出：`reports/底稿_GOSPD01010.csv`
+- 工作台：http://127.0.0.1:5173
+- API 文档：http://127.0.0.1:8000/docs
+- 健康检查：http://127.0.0.1:8000/health
 
-## 调试控制台
+## 截止性口径
 
-Streamlit 调试页包含三个功能区：
+应确认日 = 控制权转移日（签收/验收日），与序时账过账日比对；合同付款账期不参与截止公式。
 
-1. **单条截止性测试（API调试）** — 表单调用本地 API
-2. **批量测试（上传JSONL）** — 每行一个 CutoffRequest
-3. **查看已生成底稿** — 预览 / 下载 `reports/*.csv`
+## GOSPD01030
 
-> 使用调试 UI 前请先启动 API。
-
-## 示例请求
-
-```bash
-curl -X POST http://localhost:8000/api/v1/cutoff ^
-  -H "Content-Type: application/json" ^
-  -d "{\"业务编号\":\"SO-001\",\"签收日期\":\"2026-06-01\",\"入账日期\":\"2026-06-01\",\"入账金额\":500,\"合同账期天数\":10}"
-```
-
-截止性公式：**应确认日 = 控制权转移日（签收/验收日）**，与序时账过账日比对；`合同账期天数` 仍可传入并写入底稿，但不参与应确认日计算。
+| 文档 / 门禁 | 路径 |
+|-------------|------|
+| 填制指引与 Prompt | `docs/GOSPD01030_底稿填制指引与Prompt.md` |
+| 验收矩阵 | `docs/GOSPD01030_验收矩阵与质量门禁.md` |
+| LLM JSON 合同 | `docs/GOSPD01030_定向LLM提示词与JSON输出合同.md` |
+| 可执行门禁 | `python scripts/accept_gospd01030_gates.py` |
+| 端到端签收 | `python scripts/accept_gospd01030_e2e.py` |
+| 真 OCR 端到端 | `ACCEPT_01030_OCR=1 python scripts/accept_gospd01030_ocr_e2e.py` |
+| 剩余边界说明 | `docs/剩余能力边界与已落地.md` |

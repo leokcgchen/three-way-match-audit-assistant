@@ -1,0 +1,61 @@
+{
+  "scenes": [
+    {
+      "id": "fob_standard",
+      "title": "标准 FOB（模拟）",
+      "summary": "合同 FOB Shanghai + 已装船提单 Freight Collect · 买方指定船舶",
+      "documents": [
+        {
+          "document_id": "CON-SIM-1",
+          "doc_type": "sales_contract",
+          "file": "fob_standard.md",
+          "pages": [1, 2]
+        },
+        {
+          "document_id": "BL-SIM-1",
+          "doc_type": "bill_of_lading",
+          "file": "fob_standard_bl.md",
+          "pages": [1]
+        }
+      ]
+    },
+    {
+      "id": "thin_evidence",
+      "title": "证据不足（模拟）",
+      "summary": "无可识别贸易术语的短文本",
+      "documents": [
+        {
+          "document_id": "CON-SIM-2",
+          "doc_type": "sales_contract",
+          "file": "thin_evidence.md",
+          "pages": [1]
+        }
+      ]
+    },
+    {
+      "id": "fob_conflict",
+      "title": "名义 FOB 重大冲突（模拟）",
+      "summary": "合同名义 FOB，但运费保单像 CIF；控制权仍看已装船日，不是到港日",
+      "documents": [
+        {
+          "document_id": "CON-SIM-3",
+          "doc_type": "sales_contract",
+          "file": "fob_conflict.md",
+          "pages": [1]
+        },
+        {
+          "document_id": "INS-SIM-3",
+          "doc_type": "insurance",
+          "file": "fob_conflict_ins.md",
+          "pages": [1]
+        },
+        {
+          "document_id": "BL-SIM-3",
+          "doc_type": "bill_of_lading",
+          "file": "fob_conflict_bl.md",
+          "pages": [1]
+        }
+      ]
+    }
+  ]
+}

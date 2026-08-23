@@ -1,0 +1,265 @@
+{
+  "version": "2.0.1",
+  "fallback_type": "unresolved",
+  "categories": [
+    {
+      "id": "contract",
+      "label": "合同",
+      "identity_patterns": ["销售合同", "采购合同", "购销合同", "服务合同", "合同书"],
+      "definition": "由两个或以上主体就交易标的、权利义务和履行条件形成的约定文件。",
+      "business_purpose": "确立交易双方未来的权利义务、价格、期限和违约责任。",
+      "key_fields": ["合同编号", "签约主体", "标的", "价款", "期限", "签订日期"],
+      "confusable_types": ["supplemental_agreement", "order", "acceptance_record"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "parties", "label": "签约主体", "patterns": ["甲方", "乙方", "买方", "卖方", "委托方", "受托方"]},
+        {"id": "subject", "label": "标的或服务范围", "patterns": ["服务内容", "服务范围", "采购内容", "合同标的", "供货范围", "项目名称"]},
+        {"id": "commercial_terms", "label": "交易条件", "patterns": ["合同金额", "合同总价", "价款", "付款条款", "违约责任", "合同期限", "争议解决"]}
+      ],
+      "strong_evidence": ["合同编号", "双方盖章", "签订日期", "本合同"],
+      "contrary_evidence": ["发票代码", "银行回单"]
+    },
+    {
+      "id": "supplemental_agreement",
+      "label": "补充协议",
+      "identity_patterns": ["补充协议", "变更协议", "修订协议"],
+      "definition": "对既有合同的条款、金额、期限或其他权利义务作补充、变更或澄清的协议。",
+      "business_purpose": "在不重签主合同的情况下记录双方对原约定的新增或修改。",
+      "key_fields": ["原合同编号", "补充/变更事项", "生效日期", "签约主体"],
+      "confusable_types": ["contract", "settlement_statement"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "supplement_identity", "label": "补充或变更属性", "patterns": ["补充协议", "变更协议", "补充条款", "修订协议", "本补充协议"]},
+        {"id": "base_contract", "label": "原合同引用", "patterns": ["原合同", "主合同", "合同编号", "原协议", "基于双方签订"]},
+        {"id": "changed_terms", "label": "补充或变更内容", "patterns": ["变更为", "补充约定", "修改如下", "其他条款不变", "新增条款"]}
+      ],
+      "strong_evidence": ["与原合同具有同等法律效力", "其他条款不变"],
+      "contrary_evidence": ["验收结论", "发票号码", "收款账号"]
+    },
+    {
+      "id": "order",
+      "label": "订单",
+      "identity_patterns": ["销售订单", "采购订单", "Purchase Order", "Sales Order"],
+      "definition": "买卖一方向另一方提出并记录具体商品或服务、数量、价格和交付要求的交易指令。",
+      "business_purpose": "把框架性交易安排落实为具体采购或销售需求。",
+      "key_fields": ["订单号", "买卖双方", "商品/服务", "数量", "单价", "交期"],
+      "confusable_types": ["contract", "delivery_receipt", "invoice"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "order_identity", "label": "订单识别信息", "patterns": ["订单号", "销售订单", "采购订单", "Purchase Order", "Sales Order"]},
+        {"id": "goods_quantity", "label": "商品或数量", "patterns": ["产品名称", "商品名称", "物料编码", "数量", "规格型号"]},
+        {"id": "order_terms", "label": "价格或交付要求", "patterns": ["单价", "订单金额", "交货日期", "交付日期", "收货地址"]}
+      ],
+      "strong_evidence": ["PO No", "SO No", "订单日期"],
+      "contrary_evidence": ["发票代码", "交易流水号"]
+    },
+    {
+      "id": "acceptance_record",
+      "label": "验收/交付证明",
+      "identity_patterns": ["验收报告", "验收单", "产品验收单", "交付证明"],
+      "definition": "由接收方或验收参与方对交付物、服务或工程是否符合约定标准作出评价或结论的文件。",
+      "business_purpose": "证明履约成果经过检查并形成合格、不合格或整改结论。",
+      "key_fields": ["验收对象", "验收依据", "检查过程", "验收结论", "验收方", "日期"],
+      "confusable_types": ["delivery_receipt", "settlement_statement"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "subject_or_deliverable", "label": "被验收对象", "patterns": ["验收项目", "交付物", "验收内容", "服务成果", "工程名称", "产品验收"]},
+        {"id": "acceptance_basis_or_check", "label": "验收依据或过程", "patterns": ["验收标准", "检查结果", "测试结果", "验收依据", "质量要求"]},
+        {"id": "conclusion", "label": "验收结论", "patterns": ["验收合格", "验收通过", "同意验收", "整改", "不合格"]},
+        {"id": "acceptor", "label": "验收方", "patterns": ["验收人", "验收小组", "客户确认", "监理单位", "签字"]}
+      ],
+      "strong_evidence": ["验收报告", "验收单", "验收结论", "验收日期"],
+      "contrary_evidence": ["付款条款", "发票代码", "仅确认收到"]
+    },
+    {
+      "id": "delivery_receipt",
+      "label": "送货/签收单",
+      "identity_patterns": ["目的地到货签收单", "销售发货单", "出口发货单", "送货单", "客户签收单", "签收单", "出库单", "收货确认"],
+      "definition": "记录货物发出、交接、收货或签收事实的物流履行文件，不当然证明质量验收合格。",
+      "business_purpose": "证明特定货物在特定时间、地点由发送方或承运方向接收方完成交接。",
+      "key_fields": ["发货/签收单号", "货物", "数量", "发货方", "收货方", "日期", "地点"],
+      "confusable_types": ["acceptance_record", "transport_document", "order"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "delivery_or_receipt", "label": "发货或签收行为", "patterns": ["送货单", "发货单", "签收单", "收货确认", "出库单", "客户签收"]},
+        {"id": "goods_or_quantity", "label": "货物或数量", "patterns": ["货物名称", "产品名称", "数量", "规格型号", "件数", "收货地址"]},
+        {"id": "receiver", "label": "收货方", "patterns": ["收货人", "签收人", "收货单位", "客户签字"]}
+      ],
+      "strong_evidence": ["送货单号", "签收日期", "出库日期", "实际收货"],
+      "contrary_evidence": ["发票代码"]
+    },
+    {
+      "id": "delivery_note",
+      "label": "发货单",
+      "identity_patterns": ["销售发货单", "出口发货单", "发货单"],
+      "definition": "发货方记录发出货物、数量和收发单位的物流单据，不等于质量验收。",
+      "business_purpose": "证明货物已按单发出。",
+      "key_fields": ["发货单号", "发货单位", "收货单位", "发货明细", "数量", "发货日期"],
+      "confusable_types": ["delivery_acceptance", "receipt_acceptance", "order"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "title", "label": "发货单表头", "patterns": ["销售发货单", "发货单", "发货明细"]},
+        {"id": "parties", "label": "收发单位", "patterns": ["发货单位", "收货单位", "收货单位", "交货单位"]},
+        {"id": "goods", "label": "发出货物", "patterns": ["数量", "规格", "物料", "产品名称", "发货明细"]}
+      ],
+      "strong_evidence": ["发货单号", "发货日期", "发货明细"],
+      "contrary_evidence": ["发票代码", "电子回单"]
+    },
+    {
+      "id": "delivery_acceptance",
+      "label": "发货验收单",
+      "identity_patterns": ["发货验收单"],
+      "definition": "以发货方为记录主体，对发出货物核对、验收的单据。",
+      "business_purpose": "发货方确认实发数量与质量后再发出。",
+      "key_fields": ["发货验收单号", "发货单位", "实发数量", "验收意见", "发货日期"],
+      "confusable_types": ["delivery_note", "receipt_acceptance"],
+      "minimum_required_evidence": 1,
+      "required_evidence": [
+        {"id": "title", "label": "发货验收表头", "patterns": ["发货验收单", "发货验收"]},
+        {"id": "shipper", "label": "发货方主体", "patterns": ["发货单位", "发货人", "实发", "发出"]}
+      ],
+      "strong_evidence": ["发货验收单"],
+      "contrary_evidence": ["发票代码", "电子回单"]
+    },
+    {
+      "id": "receipt_acceptance",
+      "label": "签收验收单",
+      "identity_patterns": ["签收验收单", "客户签收单", "签收单"],
+      "definition": "以收货方为记录主体，确认收到货物或验收合格的单据。",
+      "business_purpose": "收货方确认实收、签收或验收。",
+      "key_fields": ["签收单号", "收货单位", "签收人", "实收数量", "签收日期"],
+      "confusable_types": ["delivery_note", "delivery_acceptance", "acceptance_record"],
+      "minimum_required_evidence": 1,
+      "required_evidence": [
+        {"id": "title", "label": "签收验收表头", "patterns": ["签收验收单", "客户签收单", "签收单"]},
+        {"id": "receiver", "label": "收货方主体", "patterns": ["收货单位", "签收人", "实收", "收货人"]}
+      ],
+      "strong_evidence": ["签收验收单", "签收人", "签收日期"],
+      "contrary_evidence": ["发票代码", "电子回单"]
+    },
+    {
+      "id": "invoice",
+      "label": "发票",
+      "identity_patterns": ["增值税专用发票", "增值税普通发票", "增值税电子发票", "增值税发票", "商业发票", "Commercial Invoice"],
+      "definition": "由销售方或服务提供方向购买方依法开具、记录交易金额和税额的结算凭证。",
+      "business_purpose": "证明开票事实并支持收入、成本、税额和应收应付记录。",
+      "key_fields": ["发票号码", "开票日期", "购买方", "销售方", "金额", "税额", "价税合计"],
+      "confusable_types": ["settlement_statement", "payment_request", "order"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "invoice_identity", "label": "发票识别信息", "patterns": ["发票代码", "发票号码", "增值税发票", "电子发票", "商业发票", "COMMERCIAL INVOICE"]},
+        {"id": "amount_or_tax", "label": "金额或税额", "patterns": ["价税合计", "税额", "税率", "合计金额", "TOTAL AMOUNT"]},
+        {"id": "issuer_or_buyer", "label": "购销主体", "patterns": ["购买方", "销售方", "纳税人识别号", "BUYER", "SELLER"]}
+      ],
+      "strong_evidence": ["价税合计", "发票号码", "开票日期", "Invoice No"],
+      "contrary_evidence": ["验收结论", "付款条款", "交易流水号"]
+    },
+    {
+      "id": "payment_request",
+      "label": "付款申请",
+      "identity_patterns": ["付款申请", "付款申请单", "付款审批单"],
+      "definition": "由业务或经办部门向付款审批方提交、请求支付特定款项的内部或外部申请文件。",
+      "business_purpose": "发起付款审批并汇集付款事由、金额、收款方和所附依据。",
+      "key_fields": ["申请人", "收款方", "付款事由", "申请金额", "审批记录"],
+      "confusable_types": ["settlement_statement", "bank_receipt", "invoice"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "request_identity", "label": "付款申请属性", "patterns": ["付款申请", "请款单", "支付申请", "付款审批", "Payment Request"]},
+        {"id": "payee_amount", "label": "收款方和金额", "patterns": ["收款单位", "收款方", "申请金额", "付款金额", "应付金额"]},
+        {"id": "approval_or_reason", "label": "审批或付款事由", "patterns": ["付款事由", "申请部门", "经办人", "审批人", "领导审批"]}
+      ],
+      "strong_evidence": ["审批意见", "申请日期", "付款用途"],
+      "contrary_evidence": ["电子回单", "交易流水号", "验收合格"]
+    },
+    {
+      "id": "settlement_statement",
+      "label": "结算单",
+      "identity_patterns": ["结算单", "对账结算单", "结算确认单"],
+      "definition": "交易双方或项目参与方对一定期间、阶段或履约范围内应结算金额进行汇总确认的文件。",
+      "business_purpose": "形成计价、对账和应收应付结算基础。",
+      "key_fields": ["结算期间", "结算项目", "数量/工程量", "结算金额", "双方确认"],
+      "confusable_types": ["invoice", "payment_request", "acceptance_record"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "settlement_identity", "label": "结算属性", "patterns": ["结算单", "结算书", "对账单", "结算汇总", "Statement of Account"]},
+        {"id": "period_or_scope", "label": "结算期间或范围", "patterns": ["结算期间", "本期完成", "结算项目", "工程量", "对账期间"]},
+        {"id": "amount_confirmation", "label": "结算金额或确认", "patterns": ["结算金额", "应结金额", "本期金额", "双方确认", "对账无误"]}
+      ],
+      "strong_evidence": ["累计结算", "本期结算", "结算日期"],
+      "contrary_evidence": ["发票代码", "交易流水号", "付款申请"]
+    },
+    {
+      "id": "bank_receipt",
+      "label": "银行回单",
+      "identity_patterns": ["银行回单", "银行回款单", "收款回单", "付款回单", "电子回单", "银行电子回单"],
+      "definition": "由银行系统形成、记录收款、付款或资金划转结果的交易凭据。",
+      "business_purpose": "证明特定账户之间的资金交易已经由银行处理。",
+      "key_fields": ["银行", "交易流水号", "付款人", "收款人", "账号", "金额", "交易日期"],
+      "confusable_types": ["payment_request", "confirmation"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "bank_identity", "label": "银行信息", "patterns": ["银行回单", "电子回单", "交易流水号", "开户行", "付款账号", "收款账号"]},
+        {"id": "transaction", "label": "资金交易", "patterns": ["转账", "付款金额", "收款金额", "交易日期", "交易金额"]},
+        {"id": "counterparty", "label": "交易对手", "patterns": ["付款人", "收款人", "对方户名", "付款户名", "收款户名"]}
+      ],
+      "strong_evidence": ["电子回单", "交易流水号", "交易金额", "银行业务专用章"],
+      "contrary_evidence": ["验收结论", "发票代码", "申请人"]
+    },
+    {
+      "id": "confirmation",
+      "label": "函证",
+      "identity_patterns": ["银行询证函", "企业询证函", "询证函", "函证"],
+      "definition": "由审计方或被审计单位向独立第三方发出并由第三方直接确认余额、交易或其他信息的询证文件。",
+      "business_purpose": "从外部独立来源取得对余额、交易、权利义务或条件的确认。",
+      "key_fields": ["被询证方", "询证事项", "余额/交易信息", "回函结论", "回函日期"],
+      "confusable_types": ["settlement_statement", "bank_receipt"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "confirmation_identity", "label": "函证属性", "patterns": ["询证函", "函证", "银行询证函", "往来询证函", "Confirmation"]},
+        {"id": "confirmation_subject", "label": "询证事项", "patterns": ["请贵单位确认", "余额", "交易发生额", "担保", "借款", "账户信息"]},
+        {"id": "response", "label": "回函或确认", "patterns": ["信息相符", "信息不符", "回函", "被询证单位盖章", "确认无误"]}
+      ],
+      "strong_evidence": ["请直接寄回", "回函地址", "会计师事务所"],
+      "contrary_evidence": ["发票号码", "订单号", "送货单"]
+    },
+    {
+      "id": "transport_document",
+      "label": "运输单据",
+      "identity_patterns": ["Bill of Lading", "海运提单", "国际货运单", "Air Waybill", "航空运单"],
+      "definition": "由承运人、货运代理或运输参与方形成，证明货物接管、装运、运输路线或交付安排的单据。",
+      "business_purpose": "记录货物运输责任、起运地、目的地、承运信息及在途或装运事实。",
+      "subtypes": [
+        {"id": "bill_of_lading", "label": "海运提单", "patterns": ["BILL OF LADING", "提单号", "装货港", "卸货港", "SHIPPER", "CONSIGNEE"]},
+        {"id": "international_waybill", "label": "国际货运单", "patterns": ["CMR", "INTERNATIONAL CONSIGNMENT NOTE", "承运人", "发运地", "目的地"]},
+        {"id": "air_waybill", "label": "航空运单", "patterns": ["AIR WAYBILL", "AWB", "机场", "航班"]}
+      ],
+      "key_fields": ["运输单号", "托运人", "收货人", "承运人", "货物", "起运地", "目的地", "装运日期"],
+      "confusable_types": ["delivery_receipt", "freight_insurance_policy"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "transport_identity", "label": "运输单据属性", "patterns": ["BILL OF LADING", "提单", "运单", "CMR", "CONSIGNMENT NOTE", "WAYBILL"]},
+        {"id": "transport_parties", "label": "运输参与方", "patterns": ["SHIPPER", "CONSIGNEE", "CARRIER", "托运人", "收货人", "承运人"]},
+        {"id": "route_or_goods", "label": "路线或货物", "patterns": ["PORT OF LOADING", "PORT OF DISCHARGE", "起运地", "目的地", "货物名称", "件数"]}
+      ],
+      "strong_evidence": ["提单号", "装船日期", "FREIGHT", "VESSEL", "运输方式"],
+      "contrary_evidence": ["验收合格", "保险金额", "发票代码"]
+    },
+    {
+      "id": "freight_insurance_policy",
+      "label": "货运保险单",
+      "identity_patterns": ["货运保险单", "运输保险单", "Cargo Insurance Policy"],
+      "definition": "由保险人签发、约定运输途中保险标的、风险范围、保险金额和保险期间的保险凭证。",
+      "business_purpose": "证明特定货物运输风险已经投保，并记录承保范围与责任条件。",
+      "key_fields": ["保险单号", "保险人", "被保险人", "保险标的", "运输路线", "保险金额", "险别", "期间"],
+      "confusable_types": ["transport_document", "contract"],
+      "minimum_required_evidence": 2,
+      "required_evidence": [
+        {"id": "policy_identity", "label": "保险凭证属性", "patterns": ["货物运输保险单", "货运保险单", "保险单号", "INSURANCE POLICY", "CARGO INSURANCE"]},
+        {"id": "insured_interest", "label": "被保险人与保险标的", "patterns": ["被保险人", "投保人", "保险标的", "货物名称", "INSURED"]},
+        {"id": "coverage", "label": "承保范围或金额", "patterns": ["保险金额", "险别", "保险责任", "保险期间", "SUM INSURED", "COVERING"]}
+      ],
+      "strong_evidence": ["保险费", "承保航程", "保险公司", "赔款偿付地点"],
+      "contrary_evidence": ["承运人签章", "验收结论", "发票代码"]
+    }
+  ]
+}

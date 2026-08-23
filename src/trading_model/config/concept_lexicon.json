@@ -1,0 +1,35 @@
+{
+  "delivery": [
+    "交货", "交付", "装运", "装船", "装货", "卸货", "提货", "自提", "送货",
+    "交承运人", "交买方指定", "备妥", "shipped on board", "loaded on board",
+    "received for shipment", "place of receipt", "port of loading", "port of discharge",
+    "place of delivery", "container terminal", "cy", "进堆场", "货交承运人", "收货待运",
+    "已装船", "装货港", "卸货港", "交货地", "nominates the vessel", "指定船舶",
+    "ready for unloading", "可供卸货"
+  ],
+  "risk": [
+    "风险", "货损", "毁损", "灭失", "风险转移", "risk transfer", "risk passes",
+    "risk transfers", "title passes", "所有权", "控制权"
+  ],
+  "freight": [
+    "运费", "海运费", "ocean freight", "freight prepaid", "freight collect",
+    "订舱", "承运人", "主运", "pays ocean", "bears ocean", "重收费", "debit note",
+    "recharge"
+  ],
+  "insurance": [
+    "保险", "投保", "insured", "assured", "beneficiary", "loss payee",
+    "claim payable", "被保险人", "受益人", "for buyer's benefit", "卖方自保"
+  ],
+  "acceptance": [
+    "验收", "检验", "签收", "pod", "最终验收", "performance acceptance",
+    "验收合格", "拒收", "退货", "warehouse signed", "收货确认"
+  ],
+  "cost": [
+    "包装费", "装箱费", "装柜费", "清洗费", "thc", "码头操作", "packing",
+    "stuffing", "origin charges"
+  ],
+  "nominal_term": [
+    "exw", "fca", "fas", "fob", "cfr", "cif", "cpt", "cip", "dap", "dpu", "ddp",
+    "incoterms", "贸易术语", "价格术语"
+  ]
+}

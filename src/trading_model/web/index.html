@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贸易模式判断 · 模拟工作流</title>
+<link rel="stylesheet" href="/static/styles.css?v=20260820-gospd">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">贸易模式</span>
+    <span class="brand-sub">模拟样例或导入扫描件入库 · 双轨检索 · 不跑三单规则</span>
+  </div>
+  <p id="embedder-chip" class="embedder-chip" aria-live="polite">向量模型：加载中…</p>
+</header>
+
+<main>
+  <ol class="progress" id="progress" aria-label="工作流步骤">
+    <li data-step="scene" class="pending">选样例</li>
+    <li data-step="ocr" class="pending">模拟 OCR</li>
+    <li data-step="rag" class="pending">双轨检索</li>
+    <li data-step="judge" class="pending">贸易模式</li>
+  </ol>
+
+  <form id="run-form" class="layout">
+    <section class="card editor">
+      <h1>合同文本</h1>
+      <p class="hint">预设样例仍走模拟 OCR。导入 PDF/图片只入库，DeepSeek 不会触发 OCR；底稿请再点运行。</p>
+      <label for="scan-file">导入扫描件</label>
+      <div class="actions">
+        <input type="file" id="scan-file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp">
+        <button type="button" id="scan-btn">导入扫描件</button>
+      </div>
+      <label for="scene">样例</label>
+      <select id="scene" name="scene_id"></select>
+      <label for="raw-text">模拟 OCR 原文</label>
+      <textarea id="raw-text" name="raw_text" rows="14" spellcheck="false" placeholder="选择预设后自动填入；或选「自定义粘贴」后在此输入。"></textarea>
+      <div class="actions">
+        <label class="check">
+          <input type="checkbox" id="use-llm" name="use_llm" checked>
+          用 DeepSeek 生成只读参考（不写入底稿）
+        </label>
+        <button type="submit" id="run-btn">运行模拟工作流</button>
+      </div>
+      <p id="form-status" class="form-status" role="status"></p>
+    </section>
+
+    <section class="stack">
+      <article class="card conclusion" id="conclusion-card">
+        <p class="kicker">实际贸易模式 / 运输条款（合同标签不是答案）</p>
+        <h2 id="conclusion">尚未运行</h2>
+        <p id="meta-line" class="meta">状态与置信度将显示在这里</p>
+        <p id="contract-label" class="meta"></p>
+      </article>
+      <article class="card hidden" id="gospd-card">
+        <h2>GOSPD01030 填表对照</h2>
+        <p class="hint">不导出 Excel。字段名对应截止底稿格子；抄录前请人工确认。上方三字段结论不变。</p>
+        <dl id="gospd-fields" class="gospd-fields"></dl>
+      </article>
+      <article class="card hidden" id="advisory-card">
+        <h2>模型参考（不写入底稿）</h2>
+        <p class="hint">DeepSeek 只读切段后给出的意见。底稿结论仍由规则写出；本栏供对照，不会改 SQLite、向量库或结论字段。</p>
+        <p id="advisory-body" class="meta"></p>
+      </article>
+      <article class="card hidden" id="review-card">
+        <h2>无法判断：请按下列切段自行复核</h2>
+        <p class="hint">合同与后续文件对不上或证据过糊时，摊开向量库中本交易全部 chunk。</p>
+        <ol id="review-chunks" class="hit-list"></ol>
+      </article>
+      <article class="card">
+        <h2>合同向量命中</h2>
+        <ol id="contract-hits" class="hit-list"><li class="empty">运行后显示</li></ol>
+      </article>
+      <article class="card">
+        <h2>准则语料命中</h2>
+        <ol id="reg-hits" class="hit-list"><li class="empty">运行后显示</li></ol>
+      </article>
+    </section>
+  </form>
+</main>
+
+<button type="button" id="chat-fab" class="chat-fab" aria-haspopup="dialog" aria-controls="chat-dialog">问</button>
+
+<dialog id="chat-dialog" class="chat-dialog" aria-labelledby="chat-title">
+  <header class="chat-head">
+    <div>
+      <h2 id="chat-title">审计师助手</h2>
+      <p class="hint">指引用问答，不改底稿结论。注释圆点对应合同段/页。</p>
+    </div>
+    <button type="button" id="chat-close" class="ghost">关闭</button>
+  </header>
+  <div id="chat-log" class="chat-log" role="log"></div>
+  <form id="chat-form" class="chat-form">
+    <label for="chat-input" class="sr-only">问题</label>
+    <input id="chat-input" type="text" autocomplete="off" placeholder="用自然语言询问当前合同…">
+    <button type="submit" id="chat-send">发送</button>
+  </form>
+</dialog>
+
+<script src="/static/app.js?v=20260820-gospd"></script>
+</body>
+</html>

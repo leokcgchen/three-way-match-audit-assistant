@@ -1,0 +1,8 @@
+/* Vite 默认样式已弃用；工作台视觉以 styles.css 为准 */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  width: 100%;
+}

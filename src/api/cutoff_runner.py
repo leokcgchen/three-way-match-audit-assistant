@@ -80,18 +80,56 @@ def build_cutoff_response(
     )
 
 
-def perform_cutoff(request: CutoffRequest, *, write_workbook: bool = True) -> CutoffResponse:
-    """执行截止性测试并可选写入底稿 CSV（仅截止性列；三单扩展列为空）。
+def perform_cutoff(
+    request: CutoffRequest,
+    *,
+    write_workbook: bool = False,
+    calendar_mode: Optional[str] = None,
+    fiscal_year_start: Optional[str] = None,
+) -> CutoffResponse:
+    """执行截止性测试；默认不写底稿（由菜单手动生成 xlsx）。
 
-    付款账期仍解析并回填底稿，但不参与应确认日计算。
+    付款账期仍解析并回填结果对象，但不参与应确认日计算。
     """
     payment_days = resolve_payment_days(request)
+    pe = getattr(request, "报告期末日", None)
     result = _checker.check(
         contract_payment_days=payment_days,
         receipt_date=request.签收日期,
         entry_date=request.入账日期,
+        period_end=pe,
+        calendar_mode=calendar_mode,
+        fiscal_year_start=fiscal_year_start,
     )
     response = build_cutoff_response(request, result, payment_days)
+    try:
+        from src.audit.cutoff_risk_router import route_cutoff_risk
+
+        early = "提前" in str(result.issue_description or "")
+        cross = bool(pe) and result.test_status == "FAIL" and (
+            "报告期末" in str(result.issue_description or "")
+            or "跨期末" in str(result.issue_description or "")
+        )
+        route = route_cutoff_risk(
+            test_status=str(result.test_status or ""),
+            deviation_days=result.deviation_days,
+            cross_period_end=cross,
+            early_recognition=early,
+        )
+        if isinstance(response.底稿回填, dict):
+            response.底稿回填["风险路由"] = route
+        response.LLM解读 = {
+            "skipped": True,
+            "explanation": "AI 解读未自动执行（可在结果区按需生成）",
+            "source": "deferred",
+            "risk_route": route,
+        }
+    except Exception:  # noqa: BLE001
+        response.LLM解读 = {
+            "skipped": True,
+            "explanation": "AI 解读未自动执行（可在结果区按需生成）",
+            "source": "deferred",
+        }
     if write_workbook:
         abs_path = _workbook.append_to_workbook(response)
         response.底稿文件路径 = workbook_relative_path()

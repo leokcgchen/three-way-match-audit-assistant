@@ -1,0 +1,7 @@
+{
+  "transportTerms": ["运输条款", "贸易术语", "价格条款", "交货条件", "Incoterms", "terms of delivery"],
+  "controlTransferTerms": ["控制权转移", "控制权", "风险转移", "所有权转移", "title", "risk transfer"],
+  "acceptanceDate": ["签收日期", "验收日期", "签收/验收完成日期", "验收完成日期", "acceptanceDate"],
+  "deliveryDate": ["发货日期", "到货日期", "交货日期", "装船日期", "入库日期"],
+  "paymentTerms": ["付款条款", "结算条款", "payment terms"]
+}

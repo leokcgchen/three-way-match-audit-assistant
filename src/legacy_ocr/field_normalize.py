@@ -72,8 +72,13 @@ def normalize_extracted_fields(
     ocr_raw_text: str = "",
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """归一化提取字段；返回 (fields, repairs)。"""
-    fields: Dict[str, Any] = dict(input_fields or {})
-    repairs: List[Dict[str, Any]] = []
+    from src.legacy_ocr.field_aliases import enrich_fields_from_text_aliases
+
+    # 先做同义词/表头别名收敛（发运数量→quantity 等），再做格式归一
+    fields: Dict[str, Any] = enrich_fields_from_text_aliases(
+        dict(input_fields or {}), ocr_raw_text
+    )
+    repairs: List[Dict[str, Any]] = list(fields.pop("_fieldRepairs", None) or [])
 
     for date_key in (
         "documentDate",
@@ -160,6 +165,55 @@ def normalize_extracted_fields(
 
     fields = apply_amount_fields(fields, ocr_raw_text)
 
+    # 供应商名称：截断 HTML / 纳税人识别号后的拖尾
+    for name_key in ("supplierName", "buyerName"):
+        raw = fields.get(name_key)
+        if not raw:
+            continue
+        cleaned = _clean_party_name(str(raw))
+        if cleaned and cleaned != str(raw):
+            repairs.append(
+                {
+                    "path": name_key,
+                    "before": str(raw)[:80],
+                    "after": cleaned,
+                    "rule": "strip_html_and_tax_trailer",
+                }
+            )
+            fields[name_key] = cleaned
+
+    # 业务编号 OCR：S0 → SO
+    for id_key in ("documentNo", "orderNo", "contractNo"):
+        raw = fields.get(id_key)
+        if not raw:
+            continue
+        before = str(raw).strip()
+        after = re.sub(r"(?i)^S0(\d{2}[-_]?\d{3,6})$", r"SO\1", before)
+        after = re.sub(r"(?i)(?<![A-Za-z])S0(\d{2}[-_]?\d{3,6})(?![0-9A-Za-z])", r"SO\1", after)
+        if after != before:
+            repairs.append(
+                {
+                    "path": id_key,
+                    "before": before,
+                    "after": after,
+                    "rule": "ocr_s0_to_so",
+                }
+            )
+            fields[id_key] = after
+
     if repairs:
         fields["_fieldRepairs"] = repairs
     return fields, repairs
+
+
+def _clean_party_name(raw: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", raw)
+    text = re.sub(r"\s+", " ", text).strip()
+    for sep in ("纳税人识别号", "统一社会信用代码", "地址、电话", "开户行", "</"):
+        if sep in text:
+            text = text.split(sep, 1)[0].strip()
+    # 过长则截到公司后缀
+    m = re.search(r"^(.{2,40}?(?:有限公司|股份有限公司|有限责任公司|公司))", text)
+    if m:
+        return m.group(1)
+    return text[:40] if len(text) > 40 else text

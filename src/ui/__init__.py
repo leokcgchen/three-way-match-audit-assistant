@@ -1,3 +1,1 @@
-"""Streamlit UI 包（调试控制台）。"""
-
-__all__ = ["debug_console"]
+"""预览与字段高亮（工作台 PDF/OCR 取证），无 Streamlit。"""

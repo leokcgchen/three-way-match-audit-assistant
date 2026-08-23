@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,6 +43,10 @@ class CutoffRequest(BaseModel):
     签收日期: str = Field(description="必填，YYYY-MM-DD")
     入账日期: str = Field(description="必填，YYYY-MM-DD")
     入账金额: float = Field(description="必填")
+    报告期末日: Optional[str] = Field(
+        default=None,
+        description="可选 YYYY-MM-DD；有值时参与截止主判断（报告期末边界）",
+    )
 
     @field_validator("签收日期", "入账日期")
     @classmethod
@@ -52,6 +56,18 @@ class CutoffRequest(BaseModel):
             datetime.strptime(text, "%Y-%m-%d")
         except ValueError as exc:
             raise ValueError("日期格式应为 YYYY-MM-DD") from exc
+        return text
+
+    @field_validator("报告期末日")
+    @classmethod
+    def validate_period_end(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not str(value).strip():
+            return None
+        text = str(value).strip()
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("报告期末日格式应为 YYYY-MM-DD") from exc
         return text
 
 
@@ -83,4 +99,8 @@ class CutoffResponse(BaseModel):
     )
     底稿文件路径: Optional[str] = Field(
         default=None, description="底稿CSV保存路径"
+    )
+    LLM解读: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="规则结论旁路解读（不改测试状态）",
     )

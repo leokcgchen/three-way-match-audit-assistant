@@ -1,0 +1,532 @@
+spec_version: "1.0"
+language: "zh-CN"
+purpose: "从合同、物流、保险、验收、费用和结算单据中识别名义贸易术语、实际履约画像、控制权转移证据和重大冲突；不得以单一费用字段替代综合判断。"
+
+core_principles:
+  - id: P01
+    rule: "将贸易术语、买卖风险转移、会计控制权转移、承运人责任期间、实际付款人作为相互独立的判断维度。"
+  - id: P02
+    rule: "合同中的术语标签是名义术语；实际履约画像由有来源的事实字段形成。标签与画像不一致时输出‘修改/冲突’，不得静默改写为另一标准术语。"
+  - id: P03
+    rule: "费用‘已支付’、费用‘合同上应承担’、费用‘最终经济负担’分别存储。Freight Prepaid/Freight Collect 仅描述承运人端运费结算状态，不当然等同于买卖双方的最终经济负担。"
+  - id: P04
+    rule: "包装费、装箱/装柜费、码头操作费、装船费、主运费、保险费、目的港费用和进口税费必须拆分，不得统称为‘运费’。"
+  - id: P05
+    rule: "提单证明承运人接收或装船及承运人交付承诺；除非合同明确将该事件设为交付/控制权转移点，提单不能单独证明客户控制权已转移。"
+  - id: P06
+    rule: "存在签收或验收条件时，必须判断该文件是物流收讫、数量签收、质量验收、最终接受还是条件性接受；不得把所有签收单等同于最终验收。"
+  - id: P07
+    rule: "无法建立同一交易链（合同、订单、货物、箱号/提单号、金额、客户、日期）时，降低置信度并人工复核。"
+
+incoterms_reference:
+  required_contract_expression: "[术语] [准确命名地点/港口] Incoterms® [版本]"
+  transport_mode_groups:
+    any_mode: [EXW, FCA, CPT, CIP, DAP, DPU, DDP]
+    sea_or_inland_waterway_only: [FAS, FOB, CFR, CIF]
+  term_profiles:
+    EXW:
+      delivery_event: "货物在卖方场所或约定地点备妥供买方处置；卖方通常不负责装上买方车辆。"
+      risk_event: "约定交付点备妥供处置时。"
+      main_carriage_arranger: "买方"
+      main_carriage_economic_burden: "买方"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "买方（除合同另有约定）"
+      import_formality: "买方"
+    FCA:
+      delivery_event: "在约定地点将货交买方指定承运人或其他人；若地点为卖方场所，卖方负责装车；若为其他地点，通常在货物交由承运人处置时交付。"
+      risk_event: "交承运人/指定人时。"
+      main_carriage_arranger: "买方"
+      main_carriage_economic_burden: "买方"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "卖方"
+      import_formality: "买方"
+    FAS:
+      delivery_event: "在装运港将货物置于买方指定船舶旁。"
+      risk_event: "靠船交付时。"
+      main_carriage_arranger: "买方"
+      main_carriage_economic_burden: "买方"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "卖方"
+      import_formality: "买方"
+    FOB:
+      delivery_event: "在装运港将货物装上买方指定船舶。"
+      risk_event: "货物装上该船时。"
+      main_carriage_arranger: "买方"
+      main_carriage_economic_burden: "买方"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "卖方"
+      import_formality: "买方"
+    CFR:
+      delivery_event: "在装运港装船。"
+      risk_event: "货物装船时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至目的港主运费"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "卖方"
+      import_formality: "买方"
+    CIF:
+      delivery_event: "在装运港装船。"
+      risk_event: "货物装船时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至目的港主运费"
+      insurance_obligation: "卖方为买方利益订立约定标准的货物保险"
+      export_formality: "卖方"
+      import_formality: "买方"
+    CPT:
+      delivery_event: "在约定交付地将货交承运人。"
+      risk_event: "交第一承运人时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至约定目的地运费"
+      insurance_obligation: "买方；无卖方标准义务"
+      export_formality: "卖方"
+      import_formality: "买方"
+    CIP:
+      delivery_event: "在约定交付地将货交承运人。"
+      risk_event: "交第一承运人时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至约定目的地运费"
+      insurance_obligation: "卖方为买方利益订立约定标准的货物保险"
+      export_formality: "卖方"
+      import_formality: "买方"
+    DAP:
+      delivery_event: "在约定目的地，货物在到达运输工具上、可供卸货时交付。"
+      risk_event: "目的地到达运输工具上、可供卸货时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至约定目的地"
+      insurance_obligation: "无当然义务；以合同为准"
+      export_formality: "卖方"
+      import_formality: "买方"
+    DPU:
+      delivery_event: "在约定目的地卸货后交付。"
+      risk_event: "目的地卸货完成时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至约定目的地并承担卸货"
+      insurance_obligation: "无当然义务；以合同为准"
+      export_formality: "卖方"
+      import_formality: "买方"
+    DDP:
+      delivery_event: "在约定目的地到达运输工具上、可供卸货时交付，且卖方已完成进口清关并承担进口税费。"
+      risk_event: "目的地到达运输工具上、可供卸货时。"
+      main_carriage_arranger: "卖方"
+      main_carriage_economic_burden: "卖方承担至约定目的地"
+      insurance_obligation: "无当然义务；以合同为准"
+      export_formality: "卖方"
+      import_formality: "卖方"
+
+document_schema:
+  transaction_keys:
+    mandatory_or_best_effort:
+      - contract_no
+      - order_no
+      - invoice_no
+      - shipment_no
+      - bill_of_lading_no
+      - container_no
+      - package_or_batch_no
+      - seller_legal_name
+      - buyer_legal_name
+      - product_sku_or_description
+      - quantity_and_unit
+      - currency_and_amount
+  documents:
+    sales_contract_and_amendments:
+      priority: 1
+      extract:
+        - incoterm_code
+        - incoterms_version
+        - named_place_or_port
+        - delivery_clause_verbatim
+        - risk_transfer_clause_verbatim
+        - title_or_ownership_clause_verbatim
+        - control_transfer_clause_verbatim
+        - acceptance_clause_verbatim
+        - quality_inspection_clause_verbatim
+        - rejection_or_return_right_clause_verbatim
+        - main_carriage_arranger
+        - main_carriage_liability_party
+        - insurance_obligation_party
+        - insurance_beneficiary
+        - export_customs_party
+        - import_customs_party
+        - loading_party
+        - unloading_party
+        - packaging_party
+        - container_stuffing_party
+        - port_charges_allocation
+        - freight_reimbursement_clause
+        - special_cost_clause
+        - effective_date
+        - amendment_sequence
+        - governing_law
+    commercial_invoice_and_packing_list:
+      priority: 3
+      extract:
+        - invoice_trade_term_text
+        - named_place_or_port
+        - invoice_price_basis
+        - separate_freight_amount
+        - separate_insurance_amount
+        - separate_packaging_amount
+        - shipper
+        - consignee
+        - goods_description
+        - quantity_weight_volume
+        - package_count
+        - marks_and_numbers
+        - invoice_date
+    shipping_instruction_booking_confirmation_and_forwarder_invoice:
+      priority: 2
+      extract:
+        - booking_party
+        - carrier_or_forwarder
+        - cargo_ready_date
+        - place_of_receipt
+        - port_of_loading
+        - port_of_discharge
+        - place_of_delivery
+        - vessel_name
+        - voyage_no
+        - container_no
+        - equipment_type
+        - freight_payer_or_bill_to
+        - charge_codes_and_amounts
+        - freight_prepaid_or_collect
+        - origin_charge_payer
+        - destination_charge_payer
+        - cargo_or_container_cleaning_fee_payer
+        - stuffing_fee_payer
+        - terminal_handling_charge_payer
+        - loading_fee_payer
+        - documentation_fee_payer
+        - payment_status
+    bill_of_lading_or_seawaybill:
+      priority: 2
+      extract:
+        - document_type
+        - bill_of_lading_no
+        - carrier
+        - actual_carrier
+        - shipper
+        - consignee
+        - notify_party
+        - vessel_name
+        - voyage_no
+        - place_of_receipt
+        - port_of_loading
+        - port_of_discharge
+        - place_of_delivery
+        - received_for_shipment_date
+        - on_board_date
+        - bill_status
+        - freight_term_prepaid_or_collect
+        - freight_payment_text
+        - container_no
+        - seal_no
+        - goods_description
+        - packages_weight_volume
+        - clean_or_claused_status
+        - clauses_or_reservations
+        - original_or_telex_release_or_seawaybill
+        - issuer_signature
+    cargo_insurance_policy_or_certificate:
+      priority: 2
+      extract:
+        - policy_no
+        - policyholder
+        - insured_or_assured
+        - beneficiary_or_loss_payee
+        - assignability
+        - insured_goods
+        - insured_amount
+        - currency
+        - voyage_from
+        - voyage_to
+        - conveyance
+        - coverage_period_or_attachment_point
+        - institute_clause_or_coverage_scope
+        - deductible
+        - premium_payer
+        - issue_date
+        - claim_right_holder
+    delivery_receipt_and_acceptance_record:
+      priority: 2
+      extract:
+        - document_type
+        - receiving_location
+        - receiving_date_and_time
+        - receiving_party_legal_name
+        - signer_name_title_and_authority
+        - quantity_received
+        - quantity_shortage_or_damage
+        - quality_acceptance_status
+        - final_acceptance_status
+        - conditional_acceptance_terms
+        - inspection_date
+        - rejection_or_claim_notice
+        - signature_or_stamp
+        - reference_contract_order_delivery_note
+    warehouse_and_internal_logistics_records:
+      priority: 4
+      extract:
+        - outbound_date
+        - warehouse_release_no
+        - handover_party
+        - delivery_note_no
+        - carrier_pickup_time
+        - container_loading_time
+        - warehouse_operator
+        - internal_control_approval
+    customs_and_port_documents:
+      priority: 3
+      extract:
+        - export_declaration_no
+        - exporter_of_record
+        - importer_of_record
+        - declaration_date
+        - release_date
+        - port_or_border_point
+        - goods_and_value
+    payment_and_settlement_records:
+      priority: 3
+      extract:
+        - payer
+        - payee
+        - amount
+        - currency
+        - payment_date
+        - expense_type
+        - cost_center_or_contract_no
+        - reimbursement_or_recharge_reference
+        - debit_note_credit_note
+        - customer_recovery_amount
+    correspondence_and_claims:
+      priority: 3
+      extract:
+        - amendment_or_waiver_text
+        - delivery_instruction
+        - carrier_nomination
+        - dispute_or_claim_party
+        - damage_risk_bearer_statement
+        - acceptance_or_rejection_statement
+        - date_and_sender_recipient
+
+field_normalization:
+  cost_categories:
+    packaging: [包装费, 包装材料费, 打包费, 唛头费]
+    stuffing: [装箱费, 装柜费, 装箱作业费, 装柜作业费, 理货费]
+    inland_pre_carriage: [拖车费, 短驳费, 送港费, 内陆运输费]
+    origin_terminal: [THC, 码头操作费, 港杂费, 起运港费用, 堆场费]
+    loading: [装船费, 吊装费, 装载费]
+    main_carriage: [海运费, 海运基本费, Ocean Freight, 运费]
+    insurance: [海运保险费, 货运险保费, Cargo Insurance]
+    destination_terminal: [目的港THC, 目的港费用, 卸货费, 拆箱费]
+    import_clearance: [进口关税, 进口增值税, 清关费, 报关费]
+    cleaning: [清洗费, 箱洗费, 集装箱清洗费, 舱清费]
+  event_normalization:
+    carrier_received: [已收货, 已进场, 货交承运人, received for shipment, received at terminal]
+    loaded_on_board: [已装船, shipped on board, on board, 已装运]
+    destination_arrived: [到港, 到站, arrived]
+    delivered_unloaded: [已卸货交付, delivery after unloading]
+    received_by_customer: [客户签收, 收货确认, POD]
+    accepted_by_customer: [验收合格, 最终验收, final acceptance]
+
+facts_and_evidence:
+  evidence_classes:
+    contract_obligation:
+      examples: ["主合同、订单、书面补充协议、双方确认的变更单"]
+      default_weight: 5
+    third_party_carriage_event:
+      examples: ["承运人提单、海运单、订舱确认、承运人账单"]
+      default_weight: 5
+    third_party_insurance:
+      examples: ["保险单、保险凭证、保险公司账单"]
+      default_weight: 5
+    customer_acceptance:
+      examples: ["客户签收、客户验收、客户拒收/索赔通知"]
+      default_weight: 5
+    customs_or_port:
+      examples: ["报关单、港口/码头记录"]
+      default_weight: 4
+    financial_settlement:
+      examples: ["付款流水、供应商发票、借贷项通知单、费用重收费发票"]
+      default_weight: 4
+    internal_record:
+      examples: ["出库单、内部物流单、ERP字段"]
+      default_weight: 2
+    oral_or_unverified_statement:
+      examples: ["无签字邮件截屏、口头说明、缺少来源的系统备注"]
+      default_weight: 1
+  source_quality_modifiers:
+    signed_and_date_consistent: 1.0
+    third_party_issued: 1.0
+    directly_linked_to_transaction: 1.0
+    unsigned_or_partial: 0.6
+    OCR_low_confidence: 0.5
+    entity_or_goods_mismatch: 0.2
+    tamper_or_inconsistency: 0.0
+
+classification_logic:
+  preconditions:
+    - "至少取得销售合同/订单或经双方确认的交易条款；否则不得输出标准术语的高置信结论。"
+    - "建立交易匹配：至少两个强键（如合同号、提单号、箱号、订单号）或‘双方主体+货物+数量+时间窗口’的高相似度匹配。"
+  procedure:
+    - step: 1
+      action: "抽取名义术语、命名地点/港口及 Incoterms 版本。"
+    - step: 2
+      action: "分别建立六类事实：交付事件、风险承担、主运安排与费用、保险、进出口手续、客户接收/验收。"
+    - step: 3
+      action: "识别文档中的费用分类、合同义务方、实际付款方和最终经济负担；保留三者差异。"
+    - step: 4
+      action: "按术语标准画像比对每一关键维度，并标记 consistent / modified / conflict / unknown。"
+    - step: 5
+      action: "单独根据合同、提单/承运人事件、签收/验收及退换货条件，评估会计控制权转移候选时点。"
+    - step: 6
+      action: "输出名义术语、实际履约画像、术语一致性、控制权转移结论、运输活动发生在控制权转移前/后及人工复核事项。"
+  hard_stop_conditions:
+    - "术语仅写 FOB/CIF 等，但未写命名港口/地点或版本，且无其他文件补足。"
+    - "关键文件主体、箱号/提单号、货物或数量无法与合同匹配。"
+    - "存在相互矛盾的书面补充协议且无法确定生效顺序。"
+    - "客户签收仅为物流代收，且合同约定最终验收为控制权条件，但缺少最终验收文件。"
+    - "合同、提单和费用/保险证据出现重大冲突，且无变更单、重收费或结算证据解释。"
+
+term_tests:
+  FOB:
+    applicability: "仅海运/内河水运；集装箱货如仅交至堆场/承运人而非实际装船，触发 FCA 或非标准FOB复核。"
+    required_standard_indicators:
+      - "卖方在装运港装上买方指定船舶。"
+      - "买方指定/订立主运输；合同义务上由买方承担主运费。"
+      - "风险/交付点为装上船。"
+      - "卖方办理出口手续。"
+    non_dispositive_cost_exceptions:
+      - "卖方承担正常包装、标记、出口前备货成本，不单独否定 FOB。"
+      - "卖方实际代付主运费但有客户重收费、借项通知单、明确代垫约定或客户最终承担证据，应标为‘FOB—代垫/修改’，而非直接改判 CFR。"
+      - "装箱费必须先拆分为包装、装柜、起运港堆场、装船或主运相关费用；不同子项的含义不同。"
+    major_conflict_indicators:
+      - "卖方根据买卖合同自行订立并最终承担至目的港主运费，且无客户重收费或代垫说明。"
+      - "卖方被明确要求为买方利益安排货运保险，且卖方承担主运费，画像接近 CIF。"
+      - "风险或拒收权持续至目的港/客户验收，而合同同时没有清晰的独立运输服务安排。"
+  CFR:
+    applicability: "仅海运/内河水运。"
+    required_standard_indicators:
+      - "卖方安排并承担至命名目的港的主运费。"
+      - "货物装上船时交付/风险转移。"
+      - "买方没有由卖方安排的标准货运保险保障。"
+    conflict_indicators:
+      - "风险被明确约定在目的港或客户签收/验收才转移。"
+      - "主运输由买方安排且卖方未承担该费用。"
+  CIF:
+    applicability: "仅海运/内河水运。"
+    required_standard_indicators:
+      - "满足 CFR 的主运输特征。"
+      - "卖方为买方利益订立货物保险；保险单/凭证中的被保险人、受益人、索赔权或可转让安排支持该结论。"
+      - "货物装上船时交付/风险转移。"
+    caution:
+      - "卖方自行投保并不自动等于 CIF；应核实保险是否为买方利益、是否系合同义务、是否覆盖本票货物及从装运港至目的港航程。"
+  FCA:
+    applicability: "任意运输方式；集装箱货交承运人/码头通常优先考虑。"
+    required_standard_indicators:
+      - "货物在约定地点交给买方指定承运人/指定人。"
+      - "买方安排主运输。"
+      - "出口手续由卖方完成。"
+  CPT_CIP:
+    applicability: "任意运输方式。"
+    required_standard_indicators:
+      - "卖方安排并承担至命名目的地的运费。"
+      - "风险在交第一承运人时转移。"
+    distinction:
+      CPT: "无卖方标准保险义务。"
+      CIP: "卖方为买方利益安排保险。"
+  DAP_DPU_DDP:
+    applicability: "任意运输方式。"
+    delivery_distinction:
+      DAP: "目的地到达运输工具上、可供卸货。"
+      DPU: "目的地卸货后。"
+      DDP: "目的地到达运输工具上、可供卸货，且卖方完成进口清关并承担进口税费。"
+
+cost_interpretation_rules:
+  - id: C01
+    when: "仅发现卖方支付包装费或通常包装成本。"
+    outcome: "不作为否定 FOB/FCA/FAS 的证据；记录为正常卖方义务或成本，除非合同另有相反明确约定。"
+  - id: C02
+    when: "仅发现账单显示 Freight Prepaid。"
+    outcome: "记录为承运人端结算状态；继续查合同义务方、付款人、客户重收费、借项通知单和最终负担。"
+  - id: C03
+    when: "卖方付款海运费，但合同写 FOB。"
+    outcome: "先查‘代垫/应客户要求订舱/客户报销/运费包含价款/变更单’。有充分代垫或重收费证据，输出 modified_FOB；无此证据且卖方最终承担，输出 FOB重大冲突并标记 CFR_like_profile。"
+  - id: C04
+    when: "卖方付款保险费，但合同写 FOB/CFR。"
+    outcome: "核实保单的 insured/assured、beneficiary/loss payee、claim right、航程和合同保险义务；仅为卖方自身利益的保险不自动改判 CIF。"
+  - id: C05
+    when: "卖方承担目的港卸货/目的地派送费。"
+    outcome: "与 FOB/FAS/CFR/CIF 的标准画像存在强冲突；进一步判断是否 DAP/DPU/DDP 或附加物流服务。"
+  - id: C06
+    when: "‘装箱费’文本不明确。"
+    outcome: "必须分类为 packaging、container_stuffing、origin_terminal、loading、main_carriage 或 destination_unstuffing；分类不明时人工复核。"
+  - id: C07
+    when: "‘清洗费’文本不明确。"
+    outcome: "必须识别为货物/集装箱/舱位清洗、发生地点、发生时点、合同义务方、付款方和是否重收费；不以该单项费用独立改变术语。"
+
+control_transfer_assessment:
+  objective: "为收入确认提供候选事实结论，而非直接由 Incoterm 决定。"
+  indicators:
+    current_right_to_payment: "卖方是否对已交付货物有现时收款权。"
+    legal_title: "所有权/物权条款是否已转移。"
+    physical_possession: "客户或其指定方是否已取得实物占有。"
+    significant_risks_and_rewards: "毁损、滞期、仓储、价格、拒收、退换货、保险索赔风险由谁承担。"
+    customer_acceptance: "客户是否已完成合同规定的接受/验收，或验收仅属形式性。"
+  output_values: [before_carriage, at_carrier_handover, at_on_board, at_destination_arrival, at_customer_receipt, at_final_acceptance, unresolved]
+  transport_service_classification:
+    before_control_transfer: "运输通常为履行销售合同的必要活动，不当然构成单项履约义务。"
+    after_control_transfer: "运输可能构成向客户提供的单项运输服务；仍需判断是否可明确区分以及卖方是否为主要责任人。"
+    unresolved: "缺少足够证据，不给出会计结论。"
+
+conflict_resolution:
+  dimension_specific_precedence:
+    commercial_obligation: ["双方签署的最新补充协议", "主合同/订单", "双方确认的变更通知", "交易发票/结算单", "往来邮件", "内部记录"]
+    carrier_event: ["承运人已装船提单/海运单", "承运人订舱确认/跟踪记录", "港口/码头记录", "货代单据", "内部出库单"]
+    insurance_arrangement: ["保险单/保险凭证", "保险公司账单", "合同保险条款", "付款记录", "内部记录"]
+    customer_acceptance: ["合同约定的最终验收证书", "客户盖章/签字的验收单", "客户签收/POD", "第三方物流POD", "内部交付记录"]
+    economic_burden: ["合同义务与价格条款", "重收费/借贷项通知单", "付款及回款流水", "承运人账单", "内部成本归集"]
+  rule: "同一维度内以更高优先级为主；不同维度不互相覆盖。出现不可解释冲突时，输出 conflict 并列明缺少的消歧文件。"
+
+confidence_policy:
+  high: "关键交付/风险/主运费/保险/验收维度均有相互印证的合同和第三方或客户证据，且无重大冲突。"
+  medium: "核心维度可判断，但存在一项非核心缺失、金额不一致或需说明的代垫安排。"
+  low: "仅有合同标签或内部记录；存在关键单据缺失、主体不匹配或签收/验收性质不清。"
+  no_conclusion: "触发 hard_stop_conditions 或关键冲突未消除。"
+
+result_schema:
+  transaction_id: "string"
+  nominal_incoterm:
+    code: "string|null"
+    named_place_or_port: "string|null"
+    version: "string|null"
+    evidence: "array"
+  actual_fulfillment_profile:
+    delivery_event: "string|null"
+    risk_event: "string|null"
+    main_carriage_arranger: "seller|buyer|unknown"
+    main_carriage_payment_status: "seller_paid|buyer_paid|prepaid_unknown_economic_burden|collect_unknown_economic_burden|unknown"
+    main_carriage_economic_burden: "seller|buyer|shared|unknown"
+    insurance_profile: "seller_for_buyer|seller_for_self|buyer|none_evidenced|unknown"
+    export_formality_party: "seller|buyer|unknown"
+    import_formality_party: "seller|buyer|unknown"
+    loading_party: "seller|buyer|carrier|unknown"
+    unloading_party: "seller|buyer|carrier|unknown"
+    evidence: "array"
+  classification:
+    status: "standard_consistent|standard_modified|major_conflict|insufficient_evidence|not_an_incoterms_transaction"
+    candidate_profile: "string|null"
+    conclusion: "string"
+    confidence: "high|medium|low|no_conclusion"
+  control_transfer_assessment:
+    candidate_event: "string|null"
+    candidate_date: "date|null"
+    result: "supported|not_supported|unresolved"
+    indicator_assessment: "object"
+    transport_service_timing: "before_control_transfer|after_control_transfer|unresolved"
+  conflicts: "array"
+  missing_documents: "array"
+  manual_review_questions: "array"
+  evidence_map: "array"
+  audit_trail: "array"

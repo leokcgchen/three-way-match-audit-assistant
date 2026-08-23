@@ -12,21 +12,23 @@ import pandas as pd
 from src.utils.date_extractor import extract_date_from_text
 
 _BIZ_ID_TEXT_PATTERNS = (
-    re.compile(r"订单\s*[:=＝]\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"订单号\s*[:=＝]\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"业务编号\s*[:=＝]\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"销售订单号\s*[:=＝]?\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"发票号\s*[:=＝]\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"合同索引号\s*[:=＝]?\s*([A-Za-z0-9\-_]+)"),
-    re.compile(r"合同编号\s*[:=＝]\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"订单\s*[:=：＝]\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"订单号\s*[:=：＝]\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"业务编号\s*[:=：＝]\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"销售订单号\s*[:=：＝]?\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"发票号\s*[:=：＝]\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"合同索引号\s*[:=：＝]?\s*([A-Za-z0-9\-_]+)"),
+    re.compile(r"合同编号\s*[:=：＝]\s*([A-Za-z0-9\-_]+)"),
 )
 
 _FILENAME_BIZ_PATTERNS = (
-    re.compile(r"(?i)(SO\d{2,4}[-_]?\d{3,6})"),
-    re.compile(r"(?i)(HT\d{2,4}[-_]?\d{3,6})"),
-    re.compile(r"(?i)(PO\d{2,4}[-_]?\d{3,6})"),
+    re.compile(r"(?i)(SO\d{2,4}[-_]?\d{3,6}[IlO]?)"),
+    re.compile(r"(?i)((?:EXKJ|EX|KJ)?HT\d{2,4}[-_]?\d{3,6}[IlO]?)"),
+    re.compile(r"(?i)(PO\d{2,4}[-_]?\d{3,6}[IlO]?)"),
     re.compile(r"(?i)(INV\d{2,4}[-_]?\d{3,6})"),
     re.compile(r"(?i)(SA\d{2,4}[-_]?\d{3,6})"),
+    re.compile(r"(?i)(DO\d{2,4}[-_]?\d{3,6})"),
+    re.compile(r"(?i)(BANK\d{2,8}[-_]?\d{0,8})"),
 )
 
 
@@ -75,7 +77,27 @@ def load_ledger_file(
 def normalize_biz_id(value: Any) -> str:
     text = str(value or "").strip().upper()
     text = re.sub(r"\s+", "", text)
+    # OCR 常见把 SO 识成 S0（数字零）
+    text = re.sub(r"^S0(\d{2}[-_]?\d{3,6})$", r"SO\1", text)
+    text = re.sub(r"(?<![A-Z])S0(\d{2}[-_]?\d{3,6})(?![0-9A-Z])", r"SO\1", text)
+    # 编号尾部 I/l → 1，O → 0（SO25-002I = SO25-0021）
+    text = re.sub(r"^([A-Z]{1,8}\d{2}[-_]?\d*)[IL]$", r"\g<1>1", text)
+    text = re.sub(r"^([A-Z]{1,8}\d{2}[-_]?\d*)O$", r"\g<1>0", text)
     return text
+
+
+def looks_like_biz_id(value: Any) -> bool:
+    """判断字符串是否像业务编号（避免把付款条款整段当成编号）。"""
+    text = normalize_biz_id(value)
+    if not text or len(text) > 40:
+        return False
+    if re.fullmatch(r"[A-Z]{1,10}\d{2,6}[-_]?\d{0,8}", text):
+        return True
+    if re.fullmatch(r"[A-Z]{1,10}\d{2,6}[-_]?\d{0,8}[IL]", str(value or "").strip().upper()):
+        return True
+    if re.fullmatch(r"\d{8,20}", text):  # 发票号码
+        return True
+    return False
 
 
 def compact_biz_id(value: Any) -> str:
@@ -116,7 +138,22 @@ def extract_biz_ids_from_free_text(text: str) -> List[str]:
             bid = normalize_biz_id(m.group(1))
             if bid and bid not in ids:
                 ids.append(bid)
-    return ids
+    return _drop_subsumed_biz_ids(ids)
+
+
+def _drop_subsumed_biz_ids(ids: List[str]) -> List[str]:
+    """KJHT25-0282 已抽出时丢掉被包含的 HT25-0282。"""
+    upper = [str(x) for x in ids]
+    keep: List[str] = []
+    for item in upper:
+        u = item.upper()
+        if any(
+            other.upper() != u and other.upper().endswith(u) and len(other) > len(item)
+            for other in upper
+        ):
+            continue
+        keep.append(item)
+    return keep
 
 
 def extract_biz_ids_from_filename(file_name: str) -> List[str]:
@@ -223,23 +260,20 @@ def build_ledger_index(
 def collect_document_biz_keys(fields: Dict[str, Any]) -> List[str]:
     """从 OCR 字段收集可用于序时账匹配的业务编号。"""
     keys: List[str] = []
-    for name in (
-        "documentNo",
-        "invoiceNo",
-        "contractNo",
-        "orderNo",
-        "remarks",
-        "paymentTerms",
-    ):
+    # paymentTerms / remarks 只做「编号提取」，整段文本不得当作 biz_id
+    whole_value_fields = ("documentNo", "invoiceNo", "contractNo", "orderNo", "warehouseNo")
+    extract_only_fields = ("remarks", "paymentTerms", "projectName")
+    for name in whole_value_fields + extract_only_fields:
         val = fields.get(name)
         if val is None:
             continue
         text = str(val).strip()
         if not text:
             continue
-        norm = normalize_biz_id(text)
-        if norm and norm not in keys:
-            keys.append(norm)
+        if name in whole_value_fields and looks_like_biz_id(text):
+            norm = normalize_biz_id(text)
+            if norm and norm not in keys:
+                keys.append(norm)
         for bid in extract_biz_ids_from_free_text(text):
             if bid not in keys:
                 keys.append(bid)
@@ -357,6 +391,8 @@ def apply_ledger_to_classified(
             row["ledger_match_ok"] = True
             row["ledger_matched_biz_id"] = matched_biz
             row["ledger_query_biz_id"] = query_biz
+            if hit.get("amount") is not None:
+                row["ledger_amount"] = hit["amount"]
             if query_biz and matched_biz and query_biz != matched_biz:
                 row["ledger_match_message"] = (
                     f"已匹配序时账业务 {matched_biz}（查询键 {query_biz}）"
@@ -369,6 +405,9 @@ def apply_ledger_to_classified(
         else:
             row["ledger_posting_date"] = None
             row["ledger_match_ok"] = False
+            row["ledger_matched_biz_id"] = None
+            row["ledger_query_biz_id"] = None
+            row.pop("ledger_amount", None)
             if row.get("doc_type") in {"invoice", "order"}:
                 row["ledger_match_message"] = (
                     f"未匹配：订单号 {primary} 在序时账中不存在"

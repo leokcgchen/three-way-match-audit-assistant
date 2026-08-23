@@ -1,0 +1,46 @@
+{
+  "sales_contract": [
+    {"topic": "delivery", "headings": ["交货", "交付", "装运", "运输条款", "delivery", "shipment", "transportation"]},
+    {"topic": "risk", "headings": ["风险", "货损", "灭失", "所有权", "产权", "risk", "title", "ownership"]},
+    {"topic": "freight", "headings": ["运费", "运输费用", "订舱", "承运", "freight", "carriage", "shipping cost"]},
+    {"topic": "insurance", "headings": ["保险", "投保", "insurance"]},
+    {"topic": "acceptance", "headings": ["验收", "检验", "签收", "退货", "inspection", "acceptance", "rejection"]},
+    {"topic": "cost", "headings": ["包装", "装箱", "费用", "packing", "charges"]}
+  ],
+  "order": [
+    {"topic": "delivery", "headings": ["交货", "装运", "delivery", "ship to", "shipping"]},
+    {"topic": "freight", "headings": ["贸易术语", "价格条款", "incoterms", "price term"]}
+  ],
+  "commercial_invoice": [
+    {"topic": "delivery", "headings": ["incoterms", "terms of delivery", "price term", "贸易术语", "价格条款", "交货条件"]},
+    {"topic": "freight", "headings": ["freight", "运费", "port of loading", "装运港"]}
+  ],
+  "packing_list": [
+    {"topic": "delivery", "headings": ["port of loading", "port of discharge", "vessel", "装货港", "卸货港", "船名", "container", "箱号"]},
+    {"topic": "cost", "headings": ["gross weight", "packages", "毛重", "件数", "marks"]}
+  ],
+  "bill_of_lading": [
+    {"topic": "delivery", "headings": ["place of receipt", "port of loading", "port of discharge", "place of delivery", "shipped on board", "received for shipment", "收货地", "装货港", "卸货港", "交货地", "已装船", "收货待运"]},
+    {"topic": "freight", "headings": ["freight prepaid", "freight collect", "freight payable", "运费"]},
+    {"topic": "delivery", "headings": ["shipper", "consignee", "notify", "托运人", "收货人"]}
+  ],
+  "booking_or_forwarder": [
+    {"topic": "freight", "headings": ["freight", "charges", "bill to", "prepaid", "collect", "运费", "费用", "订舱"]},
+    {"topic": "delivery", "headings": ["place of receipt", "port of loading", "vessel", "装货港"]}
+  ],
+  "insurance": [
+    {"topic": "insurance", "headings": ["insured", "assured", "beneficiary", "loss payee", "被保险人", "受益人", "投保人", "保险金额"]}
+  ],
+  "delivery_receipt": [
+    {"topic": "acceptance", "headings": ["pod", "signed", "received", "签收", "收货"]}
+  ],
+  "acceptance": [
+    {"topic": "acceptance", "headings": ["验收", "合格", "acceptance", "inspection"]}
+  ],
+  "warehouse": [
+    {"topic": "acceptance", "headings": ["出库", "收货", "签收", "inbound", "outbound"]}
+  ],
+  "payment_or_recharge": [
+    {"topic": "freight", "headings": ["重收费", "debit", "credit", "recharge", "运费"]}
+  ]
+}

@@ -139,6 +139,23 @@ def test_collect_biz_keys():
     assert "SO25-0281" in keys
 
 
+def test_normalize_biz_id_tail_i_to_one():
+    from src.legacy_ocr.ledger_parser import extract_biz_ids_from_filename, normalize_biz_id
+
+    assert normalize_biz_id("SO25-002I") == "SO25-0021"
+    assert normalize_biz_id("SO25-002l") == "SO25-0021"
+    assert extract_biz_ids_from_filename("SO25-002I_签收单.pdf") == ["SO25-0021"]
+
+
+def test_kjht_fullwidth_colon_not_truncated_to_ht():
+    from src.legacy_ocr.ledger_parser import extract_biz_ids_from_free_text
+
+    ids = extract_biz_ids_from_free_text("合同编号：KJHT25-0282 业务编号：SO25-0282")
+    assert "SO25-0282" in ids
+    assert "KJHT25-0282" in ids
+    assert "HT25-0282" not in ids
+
+
 if __name__ == "__main__":
     test_suggest_column_mapping_sap()
     test_build_index_and_lookup()

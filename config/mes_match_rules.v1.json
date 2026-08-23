@@ -1,0 +1,92 @@
+{
+  "version": "1.1.0",
+  "purpose": "面向审计师展示的三单/截止可解释规则：必须写清「哪张单的哪个字段 vs 哪张单的哪个字段」；不替代引擎实现；失败须写出左右值。日期先后进截止层，不进三单放行。",
+  "light_legend": {
+    "green": "单据已识别、必要字段齐、规则无异常 → 可继续 / 已通过",
+    "yellow": "分类存疑、模糊匹配或需专业判断 → 由审计师裁决",
+    "red": "缺单据、关键字段缺失、无法归属同一笔，或规则明确冲突 → 须处理",
+    "wait": "待上传凭证或测试进行中 → 尚未出灯"
+  },
+  "rules": [
+    {
+      "rule_id": "docs_same_business",
+      "label": "同一笔业务单据归属",
+      "layer": "binding",
+      "left": "合同/订单/发货/签收/发票上的业务号或关键字段",
+      "right": "当前样本笔业务号",
+      "formula": "相关单据能否归到同一笔样本（业务号/订单号/合同号勾稽）",
+      "pass_when": "各单据归属同一业务笔，无串单",
+      "fail_example": "发票业务号 SO25-0022 与本笔 SO25-0021 不一致"
+    },
+    {
+      "rule_id": "required_docs_present",
+      "label": "必要单据齐全",
+      "layer": "completeness",
+      "left": "本笔应有单据清单（订单、签收/验收、发票等）",
+      "right": "已上传并识别的单据",
+      "formula": "是否缺少订单、发票或验收/签收单（按底稿目标）",
+      "pass_when": "配方要求的必要单据均已到齐",
+      "fail_example": "缺单据：客户签收单、增值税发票"
+    },
+    {
+      "rule_id": "required_fields_present",
+      "label": "关键字段已提取",
+      "layer": "completeness",
+      "left": "必要字段目录（购方、数量、价税合计、签收日、入账日等）",
+      "right": "各单据已确认字段",
+      "formula": "单据中的关键字段是否缺失或未确认",
+      "pass_when": "本笔测试所需字段均已提取并可引用",
+      "fail_example": "缺：价税合计、签收/验收数量"
+    },
+    {
+      "rule_id": "qty_order_vs_receipt",
+      "label": "订单数量 vs 签收/验收数量",
+      "layer": "three_way",
+      "left": "订单.数量",
+      "right": "签收单/验收单.数量",
+      "formula": "订单.数量 ≈ 签收/验收.数量（容差内）",
+      "pass_when": "双方均有数量且在容差内一致",
+      "fail_example": "订单数量 100 vs 签收/验收数量 98"
+    },
+    {
+      "rule_id": "qty_receipt_vs_invoice",
+      "label": "签收/验收数量 vs 发票开票数量",
+      "layer": "three_way",
+      "left": "签收单/验收单.数量",
+      "right": "发票.开票数量",
+      "formula": "签收/验收.数量 ≈ 发票.开票数量（容差内）",
+      "pass_when": "双方均有数量且在容差内一致",
+      "fail_example": "签收/验收数量 100 vs 发票开票数量 95"
+    },
+    {
+      "rule_id": "amount_order_vs_invoice",
+      "label": "订单金额 vs 发票金额",
+      "layer": "three_way",
+      "left": "订单.价税合计",
+      "right": "发票.价税合计",
+      "formula": "订单.价税合计 ≈ 发票.价税合计（或约定不含税口径）",
+      "pass_when": "双方均有金额且在容差内一致",
+      "fail_example": "订单价税合计 64660.8 vs 发票价税合计 68400"
+    },
+    {
+      "rule_id": "buyer_name_consistent",
+      "label": "购方/客户名称三方一致",
+      "layer": "three_way",
+      "left": "订单.购方名称",
+      "right": "签收.购方名称 / 发票.购方名称",
+      "formula": "订单.购方名称 = 签收.购方名称 = 发票.购方名称（归一化后）",
+      "pass_when": "三方名称一致或可归一为同一主体",
+      "fail_example": "订单「甲公司」vs 发票「甲公司（深圳）」无法归一"
+    },
+    {
+      "rule_id": "date_order_ship_receipt_posting",
+      "label": "日期先后与截止（不进三单放行）",
+      "layer": "cutoff",
+      "left": "签收/控制权转移日",
+      "right": "序时账入账日（对照报告期末）",
+      "formula": "订单日 ≤ 发货日 ≤ 签收/控制权日；再与入账日、报告期末判断是否跨期",
+      "pass_when": "控制权/签收日与入账日归属正确会计期间",
+      "fail_example": "签收 2025-08-10 vs 入账 2025-07-31（提前确认）"
+    }
+  ]
+}

@@ -18,7 +18,12 @@ TOTAL_AMOUNT_LABELS = (
 )
 
 NET_AMOUNT_LABELS = (
+    "合计（不含税）",
+    "合计不含税",
+    "折后不含税金额",
+    "折后不含税",
     "未税金额",
+    "不含税金额合计",
     "不含税金额",
     "未税小计",
     "金额",
@@ -41,18 +46,47 @@ def to_ascii_digits(raw: str) -> str:
     return "".join(out).strip()
 
 
+# 千分位或小数：9,683.98 / 9.683,98 / OCR 把逗号认成点的 9.683.98
+AMOUNT_TOKEN_RE = re.compile(
+    r"-?(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d{1,2})?"
+)
+
+
 def _parse_number(raw: Any) -> Optional[float]:
+    """解析金额。千分位逗号不得当成小数点；多个点视为千分位。"""
     if raw is None:
         return None
     s = to_ascii_digits(str(raw))
     if not s:
         return None
-    s = s.replace(",", "").replace("¥", "").replace("￥", "").strip()
-    m = re.match(r"^(\d+(?:\.\d+)?)", s)
+    s = s.replace("¥", "").replace("￥", "").replace(" ", "").strip()
+    m = AMOUNT_TOKEN_RE.search(s)
     if not m:
-        return None
+        m = re.search(r"-?\d+(?:[.,]\d+)?", s)
+        if not m:
+            return None
+    token = m.group(0)
+    if "," in token and "." in token:
+        if token.rfind(",") > token.rfind("."):
+            token = token.replace(".", "").replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    elif token.count(".") > 1:
+        parts = token.split(".")
+        if 1 <= len(parts[-1]) <= 2:
+            token = "".join(parts[:-1]) + "." + parts[-1]
+        else:
+            token = "".join(parts)
+    elif token.count(",") > 1:
+        token = token.replace(",", "")
+    elif token.count(",") == 1:
+        left, right = token.split(",", 1)
+        if len(right) <= 2 and len(left) <= 6:
+            token = f"{left}.{right}"
+        else:
+            token = token.replace(",", "")
     try:
-        return float(m.group(1))
+        return float(token)
     except ValueError:
         return None
 
@@ -64,16 +98,40 @@ def to_wan_yuan(value: float) -> float:
     return round(value, 6)
 
 
+def in_html_detail_table_header(ocr_text: str, match_start: int) -> bool:
+    """命中落在 HTML 明细表头行（项目/规格/数量/单价…）时，不能当单据级金额。"""
+    text = str(ocr_text or "")
+    low = text.lower()
+    tr_start = low.rfind("<tr", 0, match_start)
+    tr_end = low.find("</tr>", match_start)
+    if tr_start >= 0 and tr_end > tr_start:
+        row = text[tr_start : tr_end + 5]
+    else:
+        line_start = text.rfind("\n", 0, match_start) + 1
+        line_end = text.find("\n", match_start)
+        row = text[line_start : line_end if line_end >= 0 else None]
+    row_l = row.lower()
+    if "<td>" not in row_l and "<th>" not in row_l:
+        return False
+    header_tokens = ("项目名称", "规格型号", "单位", "数量", "单价", "税率")
+    return sum(1 for t in header_tokens if t in row) >= 3
+
+
+def _in_html_detail_header(ocr_text: str, match_start: int) -> bool:
+    return in_html_detail_table_header(ocr_text, match_start)
+
+
 def _first_amount_in_text(ocr_text: str, labels: Tuple[str, ...]) -> Optional[float]:
     if not ocr_text:
         return None
     for label in labels:
         pattern = (
-            rf"{re.escape(label)}\s*[:：]?\s*[¥￥$]?\s*([\d,]+(?:\.\d{{1,2}})?)"
+            rf"{re.escape(label)}\s*[:：]?\s*[¥￥$]?\s*({AMOUNT_TOKEN_RE.pattern})"
         )
-        m = re.search(pattern, ocr_text, flags=re.I)
-        if m:
-            val = _parse_number(m.group(1).replace(",", ""))
+        for m in re.finditer(pattern, ocr_text, flags=re.I):
+            if _in_html_detail_header(ocr_text, m.start()):
+                continue
+            val = _parse_number(m.group(1))
             if val is not None and val > 0:
                 return val
     return None
@@ -184,13 +242,15 @@ def resolve_total_amount_wan(
 
 
 def apply_amount_fields(fields: Dict[str, Any], ocr_text: str = "") -> Dict[str, Any]:
-    """写入 totalAmount（万元）或标记缺失，不填默认值。"""
+    """写入 totalAmount（元）。内部仍用万元解析函数，落库统一为元供三单/金额/底稿共用。"""
     out = dict(fields)
     amount_wan, rule = resolve_total_amount_wan(out, ocr_text)
     if amount_wan is not None:
-        out["totalAmount"] = str(amount_wan)
+        yuan = round(float(amount_wan) * WAN_YUAN_THRESHOLD, 2)
+        out["totalAmount"] = str(yuan)
         out["_amountSource"] = rule
-        out["_amountUnit"] = "万元"
+        out["_amountUnit"] = "元"
+        out["_amountWan"] = str(amount_wan)  # 兼容旧展示
         out.pop("_totalAmountMissing", None)
     else:
         out.pop("totalAmount", None)

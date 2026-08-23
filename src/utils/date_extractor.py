@@ -357,6 +357,10 @@ def apply_receipt_date_fields(
     """将签收日语义解析结果写入字段 dict（仅入库/签收单）。"""
     doc = (document_type or fields.get("documentType") or "").strip().lower()
     if doc not in {"warehouse_receipt", "receipt"}:
+        # 合同/发票等即使正文提到到货，也不写入截止专用签收日
+        if doc in {"contract", "invoice", "purchase_order", "order", "other", "payment"}:
+            fields.pop("receiptDateForCutoff", None)
+            fields.pop("_receiptDateSource", None)
         return fields
     resolved = resolve_receipt_dates(ocr_text, payment_terms=fields.get("paymentTerms"))
     for key in ("deliveryDate", "acceptanceDate", "receiptDateForCutoff", "_receiptDateSource"):
@@ -366,4 +370,37 @@ def apply_receipt_date_fields(
     cutoff = resolved.get("receiptDateForCutoff")
     if cutoff:
         fields["documentDate"] = cutoff
+        return fields
+
+    # 规则抽不到控制权/验收日 → 可选 LLM 语义补抽（BATCH_LLM_ASSIST）
+    try:
+        from src.llm.batch_assist import enrich_receipt_fields_with_cutoff_llm
+
+        enriched, _notes = enrich_receipt_fields_with_cutoff_llm(
+            fields,
+            [
+                {
+                    "doc_type": doc or "receipt",
+                    "file_name": "",
+                    "raw_text": ocr_text,
+                }
+            ],
+        )
+        fields.update(
+            {
+                k: enriched[k]
+                for k in (
+                    "deliveryDate",
+                    "acceptanceDate",
+                    "receiptDateForCutoff",
+                    "documentDate",
+                    "_receiptDateSource",
+                    "_cutoffSemantic",
+                    "_cutoffUnresolved",
+                )
+                if k in enriched
+            }
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return fields

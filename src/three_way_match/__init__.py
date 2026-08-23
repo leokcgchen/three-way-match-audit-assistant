@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.three_way_match.models import (
+    GoodsReceipt,
     Invoice,
     MatchResult,
     Order,
@@ -18,6 +19,7 @@ __all__ = [
     "merge_overall_status",
     "Order",
     "WarehouseReceipt",
+    "GoodsReceipt",
     "Invoice",
     "ThreeWayMatchRequest",
     "MatchResult",

@@ -36,7 +36,7 @@ WORKBOOK_COLUMNS: List[str] = [
     "入库金额（万元）",
     "发票金额（万元）",
     "金额差异率（%）",
-    "匹配得分",
+    "三单决策",
 ]
 
 
@@ -99,7 +99,7 @@ class WorkbookGenerator:
             "入库金额（万元）": "",
             "发票金额（万元）": "",
             "金额差异率（%）": "",
-            "匹配得分": "",
+            "三单决策": "",
         }
         if match is None:
             return empty
@@ -134,7 +134,7 @@ class WorkbookGenerator:
                 if order_amt is not None
                 else ""
             ),
-            "匹配得分": _cell(match.match_score),
+            "三单决策": _cell(getattr(match, "decision", None) or match.overall_status),
         }
 
     @classmethod

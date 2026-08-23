@@ -6,16 +6,34 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Node / 前端
+web/node_modules/
+web/dist/
+web/.vite/
+*.tsbuildinfo
 
 # 日志与本地报告产物
-logs/*.log
-logs/*.json
+logs/
+!logs/.gitkeep
 reports/*.json
 reports/*.csv
+reports/*.xlsx
 !reports/.gitkeep
+
+# OCR / 调试二进制残留
+*.bin
 
 # 系统与 IDE
 .DS_Store
@@ -23,8 +41,31 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*.swo
 
 # Streamlit / 临时
 .streamlit/secrets.toml
 *.tmp
 .column_mapping_cache.json
+
+# 工作台导出的底稿（默认落在项目根）
+/审阅底稿_*.xlsx
+/GOSPD01010_*.xlsx
+/GOSPD01030_*.xlsx
+
+# 本地一键打包脚本生成的临时目录
+_pack_staging/
+_colleague_share_*/
+
+# 本地开发工具与视觉设计临时文件
+.cursor/
+.superpowers/
+edge-qa-profile/
+.edge-qa*/
+
+# 运行期缓存、上传件与导出结果
+data/demo_ocr_cache/
+data/processed/
+data/raw/*
+exports/
+qa_*.png

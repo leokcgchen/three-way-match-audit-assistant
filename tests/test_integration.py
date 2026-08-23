@@ -181,9 +181,7 @@ def test_payment_days_extraction_consistency():
 
 
 def test_workbook_22_columns_with_match_and_cutoff_only():
-    """底稿 22 列；三单联动写入匹配列；单独截止性 API 匹配列为空。"""
-    import csv
-
+    """CSV 列定义仍为 22 列；API 默认不再自动写底稿（改由菜单手动生成 xlsx）。"""
     from config.settings import settings
     from src.reporting import WORKBOOK_COLUMNS
 
@@ -195,7 +193,7 @@ def test_workbook_22_columns_with_match_and_cutoff_only():
         "入库金额（万元）",
         "发票金额（万元）",
         "金额差异率（%）",
-        "匹配得分",
+        "三单决策",
     ):
         assert col in WORKBOOK_COLUMNS
 
@@ -204,24 +202,14 @@ def test_workbook_22_columns_with_match_and_cutoff_only():
         wb_path.unlink()
 
     client = TestClient(app)
-    # 1) 三单联动
     resp = client.post("/api/v1/three-way-match", json=_sample_request().model_dump())
     assert resp.status_code == 200, resp.text
-    assert resp.json().get("底稿文件路径")
+    body = resp.json()
+    assert body.get("match_result", {}).get("overall_status") == "PASS"
+    # 手动底稿模式：默认不落盘
+    assert not body.get("底稿文件路径")
+    assert not wb_path.exists()
 
-    with wb_path.open(encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        assert list(reader.fieldnames) == WORKBOOK_COLUMNS
-        rows = list(reader)
-    assert rows, "底稿应至少有一行"
-    match_row = rows[-1]
-    assert match_row["三单匹配状态"] == "PASS"
-    assert match_row["匹配得分"] in {"100", "100.0"}
-    assert match_row["供应商一致性"] == "一致"
-    assert match_row["订单金额（万元）"] == "500.0"
-    assert match_row["测试状态"] == "PASS"
-
-    # 2) 单独截止性 API → 新增 7 列为空；签收=入账 → PASS（账期不参与）
     cutoff_payload = {
         "业务编号": "SO-E2-ONLY",
         "签收日期": "2026-06-01",
@@ -233,19 +221,37 @@ def test_workbook_22_columns_with_match_and_cutoff_only():
     assert cresp.status_code == 200, cresp.text
     assert cresp.json()["测试状态"] == "PASS"
     assert cresp.json()["应确认日期"] == "2026-06-01"
-
-    with wb_path.open(encoding="utf-8-sig", newline="") as fp:
-        rows = list(csv.DictReader(fp))
-    only_row = next(r for r in rows if r["业务编号"] == "SO-E2-ONLY")
-    assert only_row["三单匹配状态"] == ""
-    assert only_row["供应商一致性"] == ""
-    assert only_row["订单金额（万元）"] == ""
-    assert only_row["入库金额（万元）"] == ""
-    assert only_row["发票金额（万元）"] == ""
-    assert only_row["金额差异率（%）"] == ""
-    assert only_row["匹配得分"] == ""
-    assert only_row["测试状态"] == "PASS"
+    assert not cresp.json().get("底稿文件路径")
+    assert not wb_path.exists()
     print("test_workbook_22_columns_with_match_and_cutoff_only: PASS")
+
+
+def test_manual_audit_workbook_xlsx(tmp_dir: Optional[str] = None):
+    """手动 xlsx：按已跑测试生成多 sheet。"""
+    import tempfile
+    from pathlib import Path
+
+    from src.reporting.audit_workbook_xlsx import (
+        build_audit_workbook_payload,
+        generate_audit_workbook_xlsx,
+    )
+
+    root = Path(tmp_dir) if tmp_dir else Path(tempfile.mkdtemp(prefix="wb_xlsx_"))
+    payload = build_audit_workbook_payload(
+        amount={
+            "status": "PASS",
+            "human_readable_summary": "金额一致",
+            "accuracy_report": {"business_id": "B1"},
+        }
+    )
+    out = generate_audit_workbook_xlsx(payload, root / "t.xlsx")
+    assert out.exists()
+    from openpyxl import load_workbook
+
+    wb = load_workbook(out)
+    assert "汇总" in wb.sheetnames
+    assert "金额准确性" in wb.sheetnames
+    print("test_manual_audit_workbook_xlsx: PASS")
 
 
 def test_reports_dir_config_effective(tmp_dir: Optional[str] = None):
@@ -329,6 +335,7 @@ if __name__ == "__main__":
     test_cutoff_skipped_when_posting_date_missing()
     test_payment_days_extraction_consistency()
     test_workbook_22_columns_with_match_and_cutoff_only()
+    test_manual_audit_workbook_xlsx()
     test_reports_dir_config_effective()
     test_human_readable_summary_contains_key_fields()
     test_human_readable_summary_missing_posting_date()

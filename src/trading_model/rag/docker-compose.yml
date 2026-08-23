@@ -1,0 +1,19 @@
+# Chroma vector DB via 渡渡鸟国内镜像 docker.aityp.com
+# 对应官方 docker.io/chromadb/chroma
+# 本机未装 Docker 时，检索仍走 sidecar；装好后执行 start_chroma.ps1
+
+services:
+  chroma:
+    image: docker.aityp.com/chromadb/chroma:latest
+    container_name: audit-chroma
+    ports:
+      - "8000:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+volumes:
+  chroma_data:

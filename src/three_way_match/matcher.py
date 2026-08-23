@@ -16,7 +16,11 @@ from src.three_way_match.models import (
     ThreeWayMatchResponse,
     WarehouseReceipt,
 )
-from src.three_way_match.summary import build_human_readable_summary
+from src.three_way_match.summary import (
+    build_cutoff_summary,
+    build_human_readable_summary,
+    build_three_way_summary,
+)
 from src.utils.date_extractor import extract_days_from_description, pick_receipt_date_from_fields
 from src.utils.logger import logger
 
@@ -24,11 +28,17 @@ Status = Literal["PASS", "WARNING", "FAIL"]
 _STATUS_RANK: dict[str, int] = {"PASS": 0, "WARNING": 1, "FAIL": 2}
 
 SKIP_REASON_MISSING_POSTING = "入账日期缺失，无法执行截止性测试"
+SKIP_REASON_MISSING_RECEIPT = "控制权转移/签收日期缺失，无法执行截止性测试"
 
 
-def _to_wan_float(value: Any, default: float = 0.0) -> float:
-    """解析 OCR 金额并统一为万元（>10000 视为元）。"""
-    from src.legacy_ocr.amount_resolve import _parse_number, to_wan_yuan
+def _to_yuan_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    amount_unit: str | None = None,
+) -> float:
+    """解析 OCR 金额为元。若字段标明万元则还原；禁止数量走此函数。"""
+    from src.legacy_ocr.amount_resolve import WAN_YUAN_THRESHOLD, _parse_number
 
     if value is None:
         return default
@@ -41,12 +51,43 @@ def _to_wan_float(value: Any, default: float = 0.0) -> float:
         num = parsed
     if num <= 0:
         return default
-    return to_wan_yuan(num)
+    unit = str(amount_unit or "").strip()
+    if unit in {"万元", "wan", "WAN"}:
+        return round(num * WAN_YUAN_THRESHOLD, 2)
+    return round(num, 2)
 
 
-def _first_wan_amount(*candidates: Any) -> float:
+def _to_qty_float(value: Any, default: float = 0.0) -> float:
+    """数量独立解析，禁止走金额万元换算。缺省返回 default（调用方应优先用 pick）。"""
+    from src.legacy_ocr.amount_resolve import _parse_number
+
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+    else:
+        parsed = _parse_number(value)
+        if parsed is None:
+            return default
+        num = parsed
+    if num <= 0:
+        return default
+    return float(num)
+
+
+def _qty_from_fields(fields: dict[str, Any]) -> tuple[float, bool]:
+    """返回 (数量, 是否抽到)。未抽到时数量为 0 且 found=False，摘要勿报成 100% 业务差异。"""
+    from src.legacy_ocr.field_aliases import pick_quantity_value
+
+    q = pick_quantity_value(fields)
+    if q is None:
+        return 0.0, False
+    return float(q), True
+
+
+def _first_yuan_amount(*candidates: Any, amount_unit: str | None = None) -> float:
     for val in candidates:
-        amt = _to_wan_float(val, default=0.0)
+        amt = _to_yuan_float(val, default=0.0, amount_unit=amount_unit)
         if amt > 0:
             return amt
     return 0.0
@@ -57,28 +98,18 @@ def _coalesce_three_way_amounts(
     receipt_amt: float,
     invoice_amt: float,
 ) -> tuple[float, float, float]:
-    """
-    三单金额对齐：入库/发票未识别时默认与订单一致（同笔业务常见同价）。
-    """
-    if order_amt > 0:
-        if receipt_amt <= 0:
-            receipt_amt = order_amt
-        if invoice_amt <= 0:
-            invoice_amt = order_amt
-    elif invoice_amt > 0:
-        if order_amt <= 0:
-            order_amt = invoice_amt
-        if receipt_amt <= 0:
-            receipt_amt = invoice_amt
-    elif receipt_amt > 0:
-        order_amt = receipt_amt
-        invoice_amt = receipt_amt
+    """禁止用其他单据金额填补缺失（审计规范）；缺多少报多少。"""
     return order_amt, receipt_amt, invoice_amt
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
-    """兼容旧调用：解析为万元浮点。"""
-    return _to_wan_float(value, default=default)
+    """兼容旧调用：解析为元。"""
+    return _to_yuan_float(value, default=default)
+
+
+# 旧名兼容
+_to_wan_float = _to_yuan_float
+_first_wan_amount = _first_yuan_amount
 
 
 def _pick_order_no(*candidates: Any) -> str:
@@ -89,6 +120,27 @@ def _pick_order_no(*candidates: Any) -> str:
         if text:
             return text
     return "UNKNOWN"
+
+
+def _pick_customer_name(*field_maps: dict[str, Any]) -> str:
+    """销售收入客户名：优先 customer*/buyer*，兼容历史 supplierName。"""
+    keys = (
+        "customerName",
+        "customer_name",
+        "buyerName",
+        "clientName",
+        "supplierName",
+        "supplier_name",
+    )
+    for fields in field_maps:
+        for key in keys:
+            raw = fields.get(key)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if text:
+                return text
+    return ""
 
 
 def build_request_from_ocr_fields(
@@ -102,54 +154,63 @@ def build_request_from_ocr_fields(
         receipt_fields.get("remarks"),
         invoice_fields.get("remarks"),
     )
-    supplier = (
-        str(
-            order_fields.get("supplierName")
-            or receipt_fields.get("supplierName")
-            or invoice_fields.get("supplierName")
-            or ""
-        ).strip()
-    )
+    supplier = _pick_customer_name(order_fields, receipt_fields, invoice_fields)
     receipt_date = str(
         pick_receipt_date_from_fields(receipt_fields)
         or receipt_fields.get("documentDate")
         or receipt_fields.get("deliveryDate")
         or ""
-    ).strip() or "1970-01-01"
+    ).strip()
+    # 缺签收/控制权日时留空，由 match_and_cutoff 跳过截止（不再用 1970-01-01 冒充）
+    if not receipt_date or receipt_date in {"1970-01-01", "None", "null"}:
+        receipt_date = ""
     posting_raw = invoice_fields.get("postingDate")
     posting_date = str(posting_raw).strip() if posting_raw else None
 
-    order_amt = _first_wan_amount(
-        order_fields.get("totalAmount"), order_fields.get("amount")
+    order_amt = _first_yuan_amount(
+        order_fields.get("totalAmount"),
+        order_fields.get("amount"),
+        amount_unit=str(order_fields.get("_amountUnit") or ""),
     )
-    receipt_amt = _first_wan_amount(
-        receipt_fields.get("totalAmount"), receipt_fields.get("amount")
+    receipt_amt = _first_yuan_amount(
+        receipt_fields.get("totalAmount"),
+        receipt_fields.get("amount"),
+        amount_unit=str(receipt_fields.get("_amountUnit") or ""),
     )
-    invoice_amt = _first_wan_amount(
-        invoice_fields.get("totalAmount"), invoice_fields.get("amount")
+    invoice_amt = _first_yuan_amount(
+        invoice_fields.get("totalAmount"),
+        invoice_fields.get("amount"),
+        amount_unit=str(invoice_fields.get("_amountUnit") or ""),
     )
     order_amt, receipt_amt, invoice_amt = _coalesce_three_way_amounts(
         order_amt, receipt_amt, invoice_amt
     )
 
+    order_qty, _ = _qty_from_fields(order_fields)
+    receipt_qty, _ = _qty_from_fields(receipt_fields)
+    invoice_qty, _ = _qty_from_fields(invoice_fields)
+
+    # 缺客户名留空，引擎比对会 FAIL；禁止「未知供应商」冒充有效名称
     return ThreeWayMatchRequest(
         order=Order(
             order_no=order_no,
-            supplier_name=supplier or "未知供应商",
+            supplier_name=supplier,
             total_amount=order_amt,
-            quantity=_to_wan_float(order_fields.get("quantity")),
+            quantity=order_qty,
             unit=order_fields.get("unit"),
             order_date=order_fields.get("documentDate"),
             payment_terms=order_fields.get("paymentTerms"),
             contract_no=order_fields.get("contractNo"),
         ),
         warehouse_receipt=WarehouseReceipt(
-            receipt_no=_pick_order_no(receipt_fields.get("documentNo"), "WR-UNKNOWN"),
+            receipt_no=_pick_order_no(receipt_fields.get("documentNo"), "RC-UNKNOWN"),
             order_no=_pick_order_no(receipt_fields.get("remarks"), order_no),
-            supplier_name=str(receipt_fields.get("supplierName") or supplier or "未知供应商"),
+            supplier_name=str(
+                _pick_customer_name(receipt_fields) or supplier or ""
+            ),
             total_amount=receipt_amt,
-            quantity=_to_wan_float(receipt_fields.get("quantity")),
-            receipt_date=receipt_date,
+            quantity=receipt_qty,
+            receipt_date=receipt_date or "UNRESOLVED",
             receiver=None,
         ),
         invoice=Invoice(
@@ -159,9 +220,11 @@ def build_request_from_ocr_fields(
                 "INV-UNKNOWN",
             ),
             order_no=_pick_order_no(invoice_fields.get("remarks"), order_no),
-            supplier_name=str(invoice_fields.get("supplierName") or supplier or "未知供应商"),
+            supplier_name=str(
+                _pick_customer_name(invoice_fields) or supplier or ""
+            ),
             total_amount=invoice_amt,
-            quantity=_to_wan_float(invoice_fields.get("quantity")),
+            quantity=invoice_qty,
             invoice_date=invoice_fields.get("documentDate"),
             posting_date=posting_date,
         ),
@@ -249,36 +312,42 @@ class ThreeWayMatcher:
         result = run_match(request)
         if result.overall_status == "PASS":
             logger.info(
-                "three-way match PASS order_no={} score={}",
+                "three-way match PASS order_no={} decision={}",
                 result.order_no,
-                result.match_score,
+                result.decision,
             )
         elif result.overall_status == "WARNING":
             logger.warning(
-                "three-way match WARNING order_no={} score={} risks={}",
+                "three-way match WARNING order_no={} decision={} risks={}",
                 result.order_no,
-                result.match_score,
+                result.decision,
                 result.risks,
             )
         else:
             logger.warning(
-                "three-way match FAIL order_no={} score={} risks={}",
+                "three-way match FAIL order_no={} decision={} risks={}",
                 result.order_no,
-                result.match_score,
+                result.decision,
                 result.risks,
             )
         return result
 
-    def build_cutoff_payload(self, request: ThreeWayMatchRequest) -> dict[str, Any]:
+    def build_cutoff_payload(
+        self,
+        request: ThreeWayMatchRequest,
+        *,
+        period_end: str | None = None,
+    ) -> dict[str, Any]:
         """从三单请求组装截止性 Agent 所需 JSON（中文字段）。
 
-        付款账期仍传入并写入底稿，供后续收款等测试；截止公式仅用签收日与入账日。
+        付款账期仍传入并写入底稿，供后续收款等测试；截止公式用签收日、入账日，
+        以及可选报告期末日。
         """
         payment_terms = request.order.payment_terms
         payment_days = (
             extract_days_from_description(payment_terms) if payment_terms else None
         )
-        return {
+        payload: dict[str, Any] = {
             "业务编号": request.order.order_no,
             "合同编号": request.order.contract_no,
             "客户名称": request.order.supplier_name,
@@ -288,6 +357,10 @@ class ThreeWayMatcher:
             "入账日期": request.invoice.posting_date,
             "入账金额": float(request.invoice.total_amount),
         }
+        pe = (period_end or "").strip()
+        if pe:
+            payload["报告期末日"] = pe
+        return payload
 
     def _skip_cutoff_missing_posting(
         self,
@@ -313,6 +386,32 @@ class ThreeWayMatcher:
             cutoff_result=None,
             cutoff_available=False,
             cutoff_skipped_reason=SKIP_REASON_MISSING_POSTING,
+        )
+
+    def _skip_cutoff_missing_receipt(
+        self,
+        request: ThreeWayMatchRequest,
+        match_result: ThreeWayMatchResponse,
+    ) -> dict[str, Any]:
+        """控制权/签收日缺失：不调用截止性。"""
+        logger.warning(
+            "cutoff skipped: missing receipt/control date order_no={}",
+            request.order.order_no,
+        )
+        match_result = match_result.model_copy(
+            update={
+                "cutoff_available": False,
+                "cutoff_skipped_reason": SKIP_REASON_MISSING_RECEIPT,
+                "cutoff_test_status": "SKIPPED",
+            }
+        )
+        return self._finalize(
+            request,
+            match_result,
+            overall_status=match_result.overall_status,
+            cutoff_result=None,
+            cutoff_available=False,
+            cutoff_skipped_reason=SKIP_REASON_MISSING_RECEIPT,
         )
 
     def _write_workbook_row(
@@ -348,12 +447,23 @@ class ThreeWayMatcher:
             raise RuntimeError(f"截止性Agent返回HTTP {response.status_code}")
         return CutoffResponse.model_validate(response.json())
 
-    def _call_cutoff_inprocess(self, payload: dict[str, Any]) -> CutoffResponse:
+    def _call_cutoff_inprocess(
+        self,
+        payload: dict[str, Any],
+        *,
+        calendar_mode: str | None = None,
+        fiscal_year_start: str | None = None,
+    ) -> CutoffResponse:
         """同进程调用；不写底稿（由 match_and_cutoff 统一写完整行）。"""
         from src.api.cutoff_runner import perform_cutoff
 
         req = CutoffRequest.model_validate(payload)
-        return perform_cutoff(req, write_workbook=False)
+        return perform_cutoff(
+            req,
+            write_workbook=False,
+            calendar_mode=calendar_mode,
+            fiscal_year_start=fiscal_year_start,
+        )
 
     def _attach_summary(
         self,
@@ -385,7 +495,7 @@ class ThreeWayMatcher:
         cutoff_available: bool = True,
         cutoff_skipped_reason: Optional[str] = None,
         cutoff_error: Optional[str] = None,
-        write_workbook: bool = True,
+        write_workbook: bool = False,
     ) -> dict[str, Any]:
         match_result = self._attach_summary(
             request,
@@ -408,12 +518,32 @@ class ThreeWayMatcher:
             "match_result": match_result,
             "match_request": request,
             "cutoff_result": cutoff_result,
+            # 独立状态供新工作流使用；overall_status 仅为旧接口兼容的聚合值。
+            "three_way_status": match_result.overall_status,
+            "cutoff_status": (
+                cutoff_result.测试状态
+                if cutoff_result is not None
+                else ("SKIPPED" if not cutoff_available else "NOT_TESTED")
+            ),
+            "three_way_summary": build_three_way_summary(request, match_result),
+            "cutoff_summary": build_cutoff_summary(
+                request,
+                cutoff_result,
+                cutoff_available=cutoff_available,
+                cutoff_skipped_reason=cutoff_skipped_reason,
+            ),
             "cutoff_available": cutoff_available,
             "cutoff_skipped_reason": cutoff_skipped_reason,
             "overall_status": overall_status,
             "cutoff_error": cutoff_error,
             "底稿文件路径": workbook_path,
             "human_readable_summary": match_result.human_readable_summary,
+            "decision": match_result.decision,
+            "decision_reasons": list(match_result.decision_reasons or []),
+            "hold_reason_code": match_result.hold_reason_code,
+            "quantity_roles": dict(match_result.quantity_roles or {}),
+            "slot_reasons": dict(match_result.slot_reasons or {}),
+            "erp_review": dict(match_result.erp_review or {}),
         }
 
     def match_and_cutoff(
@@ -422,13 +552,19 @@ class ThreeWayMatcher:
         cutoff_agent_url: str = "http://localhost:8000/api/v1/cutoff",
         *,
         inprocess: bool = False,
+        period_end: str | None = None,
+        calendar_mode: str | None = None,
+        fiscal_year_start: str | None = None,
     ) -> dict[str, Any]:
         """
-        执行三单匹配 + 自动触发截止性测试，并写入完整底稿行。
+        执行三单匹配 + 自动触发截止性测试。
 
         - inprocess=True：同进程调用 CutoffRunner（API 路由默认，防死锁）
         - inprocess=False：requests.post 调用 cutoff_agent_url
-        - 入账日期（posting_date）缺失时跳过截止性，仍写入三单匹配列
+        - 默认不写底稿文件；请在调试台「查看底稿」菜单手动生成 xlsx
+        - 入账日期或控制权/签收日缺失时跳过截止性
+        - period_end：报告期末日，传入截止引擎参与主判断
+        - calendar_mode / fiscal_year_start：会计日历（自然月 / 4-4-5）
         """
         match_result = self.match(request)
 
@@ -436,13 +572,31 @@ class ThreeWayMatcher:
         if not posting_date:
             return self._skip_cutoff_missing_posting(request, match_result)
 
-        payload = self.build_cutoff_payload(request)
+        receipt_date = (request.warehouse_receipt.receipt_date or "").strip()
+        if not receipt_date or receipt_date in {
+            "UNRESOLVED",
+            "1970-01-01",
+            "None",
+            "null",
+        }:
+            return self._skip_cutoff_missing_receipt(request, match_result)
+
+        payload = self.build_cutoff_payload(request, period_end=period_end)
         if not (payload.get("入账日期") or "").strip():
             return self._skip_cutoff_missing_posting(request, match_result)
+        if not (payload.get("签收日期") or "").strip() or payload.get("签收日期") in {
+            "UNRESOLVED",
+            "1970-01-01",
+        }:
+            return self._skip_cutoff_missing_receipt(request, match_result)
 
         try:
             if inprocess:
-                cutoff_result = self._call_cutoff_inprocess(payload)
+                cutoff_result = self._call_cutoff_inprocess(
+                    payload,
+                    calendar_mode=calendar_mode,
+                    fiscal_year_start=fiscal_year_start,
+                )
             else:
                 cutoff_result = self._call_cutoff_http(payload, cutoff_agent_url)
         except requests.exceptions.RequestException as exc:

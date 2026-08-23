@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import pytest
 
-from src.ui.debug_console import classify_document
+from src.workflow.classify import classify_document
 
 
 @pytest.mark.parametrize(
     ("file_name", "expected"),
     [
         ("SO25-0281_HT25-0281_02_销售订单.pdf", "order"),
-        ("SO25-0281_HT25-0281_03_销售发货单.pdf", "receipt"),
+        ("SO25-0281_HT25-0281_03_销售发货单.pdf", "delivery"),
         ("SO25-0281_HT25-0281_04_产品验收单.pdf", "receipt"),
         ("SO25-0281_HT25-0281_05_增值税发票.pdf", "invoice"),
         ("销售订单.pdf", "order"),
-        ("销售发货单.pdf", "receipt"),
+        ("销售发货单.pdf", "delivery"),
         ("产品验收单.pdf", "receipt"),
         ("客户签收验收单.pdf", "receipt"),
         ("增值税发票.pdf", "invoice"),

@@ -4,14 +4,24 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from src.api.hitl_gate import (
+    enforce_fields_confirmed_header,
+    enforce_matching_confirmed_header,
+)
 from src.models.schemas import CutoffResponse
 from src.three_way_match.matcher import ThreeWayMatcher
 from src.three_way_match.models import ThreeWayMatchRequest, ThreeWayMatchResponse
 
-router = APIRouter(tags=["three-way-match"])
+router = APIRouter(
+    tags=["three-way-match"],
+    dependencies=[
+        Depends(enforce_fields_confirmed_header),
+        Depends(enforce_matching_confirmed_header),
+    ],
+)
 _matcher = ThreeWayMatcher()
 
 
