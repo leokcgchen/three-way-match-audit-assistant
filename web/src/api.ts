@@ -395,6 +395,12 @@ export const api = {
         card_type?: string
         dropped?: boolean
         chain_id: string
+        business_ids?: string[]
+        suggested_doc_type?: string
+        doc_type_source?: 'ai' | 'human'
+        boundary_confirmed?: boolean
+        business_binding_source?: 'human'
+        drop_reason?: string
         keys?: Record<string, string>
       }>
       file_modes?: Record<string, string>
