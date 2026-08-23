@@ -138,7 +138,7 @@ export function PacketInspector({
 
       <button
         type="button"
-        className="btn primary packet-confirm-selection"
+        className="btn packet-confirm-selection"
         disabled={locked}
         aria-label={`确认所选 ${selectedUnits.length} 张单据`}
         onClick={() => onConfirmSelected(selectedUnits.map((unit) => unit.unit_id))}

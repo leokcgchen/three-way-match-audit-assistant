@@ -9,4 +9,15 @@ describe('PacketUnpackPage layout', () => {
     expect(rule).toMatch(/min-height:\s*0/)
     expect(rule).toMatch(/overflow-y:\s*auto/)
   })
+
+  it('keeps the large preview scrollable above the fixed gate', () => {
+    const main = styles.match(/\.packet-review-main\s*\{([^}]*)\}/)?.[1] || ''
+    const preview = styles.match(/\.packet-full-preview\s*\{([^}]*)\}/)?.[1] || ''
+    const workbench = styles.match(/\.packet-review-workbench\s*\{([^}]*)\}/)?.[1] || ''
+
+    expect(main).toMatch(/overflow-y:\s*auto/)
+    expect(preview).toMatch(/max-height:/)
+    expect(preview).toMatch(/overflow:\s*auto/)
+    expect(workbench).toMatch(/padding-bottom:/)
+  })
 })

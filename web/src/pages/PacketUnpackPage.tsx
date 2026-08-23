@@ -6,6 +6,7 @@ import {
   businessIdsForUnit,
   confirmNormalUnits,
   intakeBlockers,
+  mergeUnitWithNext,
   mergeUnitWithPrevious,
   reviewSummary,
   splitUnitAtPage,
@@ -36,6 +37,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
   const [busy, setBusy] = useState<BusyState>('idle')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [history, setHistory] = useState<PacketUnit[][]>([])
   const analyzeInflight = useRef(false)
   const thumbnailUrls = useRef<string[]>([])
 
@@ -50,6 +52,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
 
   useEffect(() => {
     setUnits(job.packet_units || [])
+    setHistory([])
   }, [job.job_id, run?.run_id, job.packet_units])
 
   useEffect(() => {
@@ -173,13 +176,31 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
     [run?.pages],
   )
 
+  const commitUnits = (change: (current: PacketUnit[]) => PacketUnit[]) => {
+    setUnits((current) => {
+      const next = change(current)
+      if (next === current) return current
+      setHistory((snapshots) => [...snapshots, current].slice(-20))
+      return next
+    })
+  }
+
+  const undoLastCommand = () => {
+    setHistory((snapshots) => {
+      const previous = snapshots[snapshots.length - 1]
+      if (!previous) return snapshots
+      setUnits(previous)
+      return snapshots.slice(0, -1)
+    })
+  }
+
   const replaceChangedUnits = (changed: PacketUnit[]) => {
     const byId = new Map(changed.map((unit) => [unit.unit_id, unit]))
-    setUnits((current) => current.map((unit) => byId.get(unit.unit_id) || unit))
+    commitUnits((current) => current.map((unit) => byId.get(unit.unit_id) || unit))
   }
 
   const dropPage = (sourceFile: string, page: number) => {
-    setUnits((current) => {
+    commitUnits((current) => {
       const owner = current.find(
         (unit) => !unit.dropped && unit.source_file === sourceFile && unit.pages.includes(page),
       )
@@ -221,7 +242,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
       units.filter((unit) => unit.source_file === sourceFile).flatMap(businessIdsForUnit),
     ))
     if (hints.length !== 1) return
-    setUnits((current) => current.map((unit) => unit.source_file === sourceFile
+    commitUnits((current) => current.map((unit) => unit.source_file === sourceFile
       ? {
           ...unit,
           business_ids: hints,
@@ -283,17 +304,25 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
           <span className={summary.anomalyCount ? 'is-danger' : ''}><b>{summary.anomalyCount}</b> 异常</span>
         </div>
         <div className="packet-review-toolbar-actions">
-          <button className="btn" type="button" disabled={locked} onClick={() => void analyze()}>
-            {busy === 'analyze' ? '分析中…' : '重新生成 AI 建议'}
+          <button className="btn" type="button" disabled={locked || history.length === 0} onClick={undoLastCommand}>
+            撤销上一步
           </button>
-          <button
-            className="btn primary"
-            type="button"
-            disabled={locked}
-            onClick={() => setUnits((current) => confirmNormalUnits(current))}
-          >
-            批量确认正常项
-          </button>
+          <details className="packet-more-actions">
+            <summary className="btn">更多</summary>
+            <div>
+              <button className="btn" type="button" disabled={locked} onClick={() => void analyze()}>
+                {busy === 'analyze' ? '分析中…' : '重新生成 AI 建议'}
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={locked}
+                onClick={() => commitUnits((current) => confirmNormalUnits(current))}
+              >
+                确认无异常项
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -347,13 +376,17 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
               setFocusedPage(page)
               if (!selectedUnitIds.includes(selectedId)) setSelectedUnitIds([selectedId])
             }}
-            onSplit={(selectedId, page) => setUnits((current) => splitUnitAtPage(current, selectedId, page))}
+            onSplit={(selectedId, page) => commitUnits((current) => splitUnitAtPage(current, selectedId, page))}
             onMerge={(selectedId) => {
-              setUnits((current) => mergeUnitWithPrevious(current, selectedId))
+              commitUnits((current) => mergeUnitWithPrevious(current, selectedId))
+              setSelectedUnitIds((current) => current.filter((id) => id !== selectedId))
+            }}
+            onMergeNext={(selectedId) => {
+              commitUnits((current) => mergeUnitWithNext(current, selectedId))
               setSelectedUnitIds((current) => current.filter((id) => id !== selectedId))
             }}
             onDropPage={dropPage}
-            onRestoreUnit={(selectedId) => setUnits((current) => current.map((unit) => unit.unit_id === selectedId
+            onRestoreUnit={(selectedId) => commitUnits((current) => current.map((unit) => unit.unit_id === selectedId
               ? { ...unit, dropped: false, drop_reason: undefined, boundary_confirmed: false }
               : unit))}
             onOpenOriginal={(sourceFile) => window.open(api.fileUrl(job.job_id, sourceFile), '_blank', 'noopener,noreferrer')}
@@ -373,7 +406,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
           businessIds={businessIds}
           locked={locked}
           onChange={replaceChangedUnits}
-          onConfirmSelected={(ids) => setUnits((current) => current.map((unit) => ids.includes(unit.unit_id)
+          onConfirmSelected={(ids) => commitUnits((current) => current.map((unit) => ids.includes(unit.unit_id)
             ? { ...unit, boundary_confirmed: true, needs_review: false }
             : unit))}
         />
@@ -394,7 +427,7 @@ export function PacketUnpackPage({ job, onJob, ocrBusy = false }: Props) {
           disabled={locked || blockers.length > 0}
           onClick={() => void confirmAndStart()}
         >
-          {busy === 'confirm' ? '保存并启动中…' : '确认并开始识别'}
+          {busy === 'confirm' ? '保存并启动中…' : '确认整理并识别'}
         </button>
       </footer>
     </div>

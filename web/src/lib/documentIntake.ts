@@ -128,6 +128,62 @@ export function mergeUnitWithPrevious(units: PacketUnit[], unitId: string): Pack
     .map((unit) => (unit.unit_id === previous.unit_id ? merged : unit))
 }
 
+export function mergeUnitWithNext(units: PacketUnit[], unitId: string): PacketUnit[] {
+  const selected = units.find((unit) => unit.unit_id === unitId)
+  if (!selected || selected.dropped) return units
+  const sameFile = units
+    .filter((unit) => !unit.dropped && unit.source_file === selected.source_file)
+    .sort((a, b) => a.page_start - b.page_start)
+  const selectedIndex = sameFile.findIndex((unit) => unit.unit_id === unitId)
+  if (selectedIndex < 0 || selectedIndex >= sameFile.length - 1) return units
+  const next = sameFile[selectedIndex + 1]
+  if (selected.page_end + 1 !== next.page_start) return units
+  const pages = [...new Set([...selected.pages, ...next.pages])].sort((a, b) => a - b)
+  const businessIds = unique([
+    ...businessIdsForUnit(selected),
+    ...businessIdsForUnit(next),
+  ])
+  const merged: PacketUnit = {
+    ...selected,
+    pages,
+    page_start: pages[0],
+    page_end: pages[pages.length - 1],
+    business_ids: businessIds,
+    chain_id: businessIds[0] || selected.chain_id,
+    split_reason: 'manual_merge',
+    boundary_confirmed: true,
+    needs_review: false,
+  }
+  return units
+    .filter((unit) => unit.unit_id !== next.unit_id)
+    .map((unit) => (unit.unit_id === selected.unit_id ? merged : unit))
+}
+
+export type PacketCommand =
+  | { type: 'split'; unitId: string; page: number }
+  | { type: 'merge_previous'; unitId: string }
+  | { type: 'merge_next'; unitId: string }
+  | { type: 'drop'; unitId: string; reason?: string }
+  | { type: 'restore'; unitId: string }
+
+export function applyPacketCommand(units: PacketUnit[], command: PacketCommand): PacketUnit[] {
+  if (command.type === 'split') return splitUnitAtPage(units, command.unitId, command.page)
+  if (command.type === 'merge_previous') return mergeUnitWithPrevious(units, command.unitId)
+  if (command.type === 'merge_next') return mergeUnitWithNext(units, command.unitId)
+  return units.map((unit) => {
+    if (unit.unit_id !== command.unitId) return unit
+    if (command.type === 'restore') {
+      return { ...unit, dropped: false, drop_reason: undefined, boundary_confirmed: false }
+    }
+    return {
+      ...unit,
+      dropped: true,
+      drop_reason: command.reason || 'manual_drop',
+      boundary_confirmed: true,
+    }
+  })
+}
+
 export function intakeBlockers(units: PacketUnit[], files: PacketFile[]): IntakeBlocker[] {
   const multiPageFiles = new Set(
     files.filter((file) => (file.page_count || 0) > 1).map((file) => file.file_name),

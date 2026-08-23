@@ -46,6 +46,7 @@ function renderSheet(
     onPageFocus: vi.fn(),
     onSplit: vi.fn(),
     onMerge: vi.fn(),
+    onMergeNext: vi.fn(),
     onDropPage: vi.fn(),
     onRestoreUnit: vi.fn(),
     onOpenOriginal: vi.fn(),
@@ -89,6 +90,7 @@ describe('PacketContactSheet', () => {
     const callbacks = {
       onSplit: vi.fn(),
       onMerge: vi.fn(),
+      onMergeNext: vi.fn(),
       onDropPage: vi.fn(),
       onRestoreUnit: vi.fn(),
       onOpenOriginal: vi.fn(),
@@ -106,6 +108,9 @@ describe('PacketContactSheet', () => {
 
     await user.click(screen.getByRole('button', { name: '将当前单据并入上一张' }))
     expect(callbacks.onMerge).toHaveBeenCalledWith('u12')
+
+    await user.click(screen.getByRole('button', { name: '将当前单据并入下一张' }))
+    expect(callbacks.onMergeNext).toHaveBeenCalledWith('u12')
 
     await user.click(screen.getByRole('button', { name: '去掉 合同包.pdf 第 2 页' }))
     expect(callbacks.onDropPage).toHaveBeenCalledWith('合同包.pdf', 2)

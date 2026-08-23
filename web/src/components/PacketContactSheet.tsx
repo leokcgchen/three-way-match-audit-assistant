@@ -13,6 +13,7 @@ type Props = {
   onPageFocus: (sourceFile: string, page: number, unitId: string) => void
   onSplit: (unitId: string, page: number) => void
   onMerge: (unitId: string) => void
+  onMergeNext: (unitId: string) => void
   onDropPage: (sourceFile: string, page: number) => void
   onRestoreUnit: (unitId: string) => void
   onOpenOriginal: (sourceFile: string) => void
@@ -49,6 +50,7 @@ export function PacketContactSheet({
   onPageFocus,
   onSplit,
   onMerge,
+  onMergeNext,
   onDropPage,
   onRestoreUnit,
   onOpenOriginal,
@@ -187,6 +189,15 @@ export function PacketContactSheet({
                                   onClick={() => onMerge(unit.unit_id)}
                                 >
                                   并入上一张
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn compact"
+                                  disabled={locked}
+                                  aria-label="将当前单据并入下一张"
+                                  onClick={() => onMergeNext(unit.unit_id)}
+                                >
+                                  并入下一张
                                 </button>
                                 <button
                                   type="button"

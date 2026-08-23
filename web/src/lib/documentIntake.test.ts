@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { PacketFile, PacketUnit } from '../types'
 import {
+  applyPacketCommand,
   businessIdsForUnit,
   confirmNormalUnits,
   intakeBlockers,
+  mergeUnitWithNext,
   mergeUnitWithPrevious,
   reviewSummary,
   splitUnitAtPage,
@@ -142,6 +144,45 @@ describe('mergeUnitWithPrevious', () => {
     ]
 
     expect(mergeUnitWithPrevious(values, 'u2')).toEqual(values)
+  })
+})
+
+describe('mergeUnitWithNext', () => {
+  it('merges a selected unit with the next contiguous unit', () => {
+    const values = [
+      unit({ unit_id: 'u1', pages: [1], page_start: 1, page_end: 1 }),
+      unit({ unit_id: 'u2', pages: [2], page_start: 2, page_end: 2 }),
+    ]
+
+    const result = mergeUnitWithNext(values, 'u1')
+
+    expect(result.filter((item) => !item.dropped)).toHaveLength(1)
+    expect(result[0].pages).toEqual([1, 2])
+    expect(result[0].unit_id).toBe('u1')
+  })
+
+  it('does not merge across files or page gaps', () => {
+    const values = [
+      unit({ unit_id: 'u1', pages: [1], page_start: 1, page_end: 1 }),
+      unit({ unit_id: 'u2', pages: [3], page_start: 3, page_end: 3 }),
+    ]
+    expect(mergeUnitWithNext(values, 'u1')).toEqual(values)
+  })
+})
+
+describe('applyPacketCommand', () => {
+  it('applies reversible drop and restore commands without mutating the input', () => {
+    const original = [unit({ unit_id: 'u1' })]
+    const dropped = applyPacketCommand(original, {
+      type: 'drop',
+      unitId: 'u1',
+      reason: '空白页',
+    })
+    const restored = applyPacketCommand(dropped, { type: 'restore', unitId: 'u1' })
+
+    expect(original[0].dropped).not.toBe(true)
+    expect(dropped[0]).toMatchObject({ dropped: true, drop_reason: '空白页' })
+    expect(restored[0]).toMatchObject({ dropped: false, boundary_confirmed: false })
   })
 })
 
