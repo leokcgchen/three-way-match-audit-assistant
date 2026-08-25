@@ -19,7 +19,7 @@ from src.workflow.chain_workspace import (
     sample_matching_ok,
 )
 from src.workflow.job_store import JOB_STORE
-from src.workflow.pipeline import run_amount, run_contract, run_evidence, run_three_way
+from src.workflow.pipeline import cutoff_calendar_mode, run_amount, run_contract, run_evidence, run_three_way
 from src.workflow.recipes import (
     STEP_AMOUNT,
     STEP_CONTRACT,
@@ -175,6 +175,10 @@ def run_batch_review(job_id: str, *, force_rerun: bool = False) -> dict[str, Any
                     docs,
                     existing_advisory=list(job.get("advisory_candidates") or []),
                     with_llm_disambiguation=False,
+                    # 无计划的旧任务沿用历史默认（合同属于核心证据）；
+                    # 只有显式底稿计划未要求合同时，才把合同降为可选。
+                    require_contract=need_contract or not plan,
+                    require_ledger=True,
                 )
                 from src.workflow.pipeline import seed_phase2
 
@@ -256,8 +260,17 @@ def run_batch_review(job_id: str, *, force_rerun: bool = False) -> dict[str, Any
                 tw = run_three_way(
                     docs,
                     period_end=job.get("period_end"),
-                    calendar_mode=job.get("calendar_mode"),
+                    calendar_mode=cutoff_calendar_mode(
+                        list((job.get("plan") or {}).get("goal_ids") or job.get("goal_ids") or []),
+                        job.get("calendar_mode"),
+                    ),
                     fiscal_year_start=job.get("fiscal_year_start"),
+                    complete_set=bool(sample.get("complete_set")),
+                    business_group_id=cid if cid != "_job" else None,
+                    business_binding_confirmed=bool(
+                        cid != "_job"
+                        and (job.get("business_group_confirmations") or {}).get(cid)
+                    ),
                 )
                 test_patch.update(three_way_sample_patch(tw))
                 actions.append("三单+截止")

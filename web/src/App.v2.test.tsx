@@ -40,8 +40,9 @@ describe('V2 simplified application journey', () => {
 
     expect(await screen.findByText('异常优先工作台')).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: '主导航' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getAllByRole('button')).toHaveLength(8)
     expect(within(nav).getByText('选择底稿目标')).toBeInTheDocument()
+    expect(within(nav).getByText('总工作台')).toBeInTheDocument()
     expect(within(nav).getByText('导出底稿')).toBeInTheDocument()
     expect(within(nav).queryByText('更多')).not.toBeInTheDocument()
 

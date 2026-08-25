@@ -15,25 +15,25 @@ type Chip = {
 const CHIPS: Chip[] = [
   {
     key: 'docs_missing',
-    label: '资料缺',
+    label: '缺少凭证资料',
     tip: '还缺凭证或必要单据未齐的样本笔数。',
     tone: 'err',
   },
   {
     key: 'fields_missing',
-    label: '字段缺',
+    label: '缺少关键字段',
     tip: '单据已有，但关键字段未提取/未确认的样本笔数。',
     tone: 'err',
   },
   {
     key: 'match_exception',
-    label: '异常',
+    label: '匹配或测试异常',
     tip: '三单/截止测试未通过，且尚未在结论页人工确认的样本笔数。',
     tone: 'err',
   },
   {
     key: 'await_human',
-    label: '待人裁',
+    label: '等待人工判断',
     tip: '单据类型存疑、同页多金额等，需要审计师裁决的样本笔数。',
     tone: 'warn',
   },

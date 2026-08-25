@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ChainInfo, type DeskLights, type MesMatchRule } from '../api'
-import { DESK_LIGHT_LEGEND_TIP } from '../lib/deskLights'
+import { DESK_LIGHT_LEGEND_INLINE, DESK_LIGHT_LEGEND_TIP } from '../lib/deskLights'
 import { BusinessWarehouseRow } from './BusinessWarehouseRow'
 
 type Props = {
@@ -8,8 +8,9 @@ type Props = {
   lights?: DeskLights | null
   activeId?: string | null
   busy?: boolean
+  mode?: 'overview' | 'upload'
   onOpen: (row: ChainInfo) => void
-  onUpload: (row: ChainInfo, files: File[]) => void | Promise<void>
+  onUpload?: (row: ChainInfo, files: File[]) => void | Promise<void>
   uploadingId?: string | null
   uploadErrorById?: Record<string, string>
 }
@@ -145,6 +146,7 @@ export function SampleDeskList({
   lights,
   activeId,
   busy,
+  mode = 'overview',
   onOpen,
   onUpload,
   uploadingId,
@@ -257,19 +259,19 @@ export function SampleDeskList({
             红 {summary.red}
           </span>
           <span className="desk-light-chip is-wait" title={DESK_LIGHT_LEGEND_TIP}>
-            待办 {summary.wait}
+            尚未判断 {summary.wait}
           </span>
           <span className="desk-light-legend hint" title={DESK_LIGHT_LEGEND_TIP}>
-            绿可继续 · 黄人裁 · 红须处理
+            {DESK_LIGHT_LEGEND_INLINE}
           </span>
           {requestText ? (
             <button
               type="button"
               className="btn compact"
               onClick={() => void copyRequest()}
-              data-tip="复制缺件索要清单，发给客户补资料。"
+              data-tip="复制缺失资料清单，发给客户补充凭证资料。"
             >
-              {copied ? '已复制' : '复制缺件索要'}
+              {copied ? '已复制' : '复制缺失资料清单'}
             </button>
           ) : null}
           <button
@@ -368,6 +370,7 @@ export function SampleDeskList({
                 busy={busy}
                 uploading={uploadingId === row.chain_id}
                 uploadError={uploadErrorById[row.chain_id] || ''}
+                mode={mode}
                 onOpen={onOpen}
                 onUpload={onUpload}
               />
@@ -401,6 +404,7 @@ export function SampleDeskList({
                 busy={busy}
                 uploading={uploadingId === row.chain_id}
                 uploadError={uploadErrorById[row.chain_id] || ''}
+                mode={mode}
                 onOpen={onOpen}
                 onUpload={onUpload}
               />

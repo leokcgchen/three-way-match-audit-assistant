@@ -23,23 +23,113 @@ export type CompareRow = {
   quantityRolesHint?: string
   /** 单元格含未保存草稿 */
   cellDraft?: Record<string, boolean>
+  /** 仅展示并供人工核对，不按跨单据相等性判定 */
+  manualReviewOnly?: boolean
 }
+
+export type TimelineResult = {
+  status: 'PASS' | 'REVIEW' | 'FAIL'
+  summary: string
+}
+
+const MANUAL_REVIEW_FIELDS = new Set([
+  'documentNo',
+  'contractNo',
+  'invoiceNo',
+  'invoiceCode',
+  'receiptNo',
+  'documentDate',
+  'plannedDeliveryDate',
+  'deliveryDate',
+  'arrivalDateTime',
+  'acceptanceDate',
+  'acceptanceDateTime',
+  'invoiceDateTime',
+  'postingDate',
+  'customerCode',
+  'buyerCode',
+  'clientCode',
+  'itemCode',
+  'batchNo',
+  'carrierName',
+  'vehiclePlate',
+  'paymentTerms',
+  'settlementTerms',
+  'transportTerms',
+  'controlTransferTerms',
+  'remarks',
+])
 
 const FIELD_LABELS: Record<string, string> = {
   documentNo: '单据编号',
   contractNo: '合同编号',
   orderNo: '订单编号',
   invoiceNo: '发票号码',
+  invoiceCode: '发票代码',
+  receiptNo: '验收单号',
   documentDate: '单据日期',
   postingDate: '入账日期',
   deliveryDate: '发货日期',
-  acceptanceDate: '签收日期',
+  acceptanceDate: '文件日期',
+  plannedDeliveryDate: '计划交付日期',
+  arrivalDateTime: '到货时间',
+  acceptanceDateTime: '验收完成时间',
+  invoiceDateTime: '开票时间',
   totalAmount: '价税合计',
-  amount: '金额',
+  amount: '金额（不含税）',
   taxAmount: '税额',
+  taxRate: '税率',
+  unitPrice: '单价（发票未税）',
+  unitPriceNet: '未税单价',
+  unitPriceGross: '含税单价',
   quantity: '数量（订单 / 签收验收 / 发票开票）',
-  supplierName: '销方/供应商',
+  unit: '单位',
+  supplierName: '卖方',
   buyerName: '购方',
+  sellerTaxId: '卖方税号',
+  buyerTaxId: '买方税号',
+  sellerAddress: '卖方地址',
+  buyerAddress: '买方地址/交货地点',
+  goodsName: '货品名称',
+  model: '规格型号',
+  customerCode: '客户编码',
+  itemCode: '物料编码',
+  batchNo: '批次',
+  carrierName: '承运单位',
+  vehiclePlate: '车辆/运输识别',
+  paymentTerms: '付款条款',
+  settlementTerms: '结算条款',
+  transportTerms: '运输条款',
+  controlTransferTerms: '控制权转移条款',
+  remarks: '备注',
+}
+
+const EXPANDED_FIELD_ORDER = [
+  'orderNo', 'contractNo', 'receiptNo', 'invoiceNo', 'invoiceCode', 'documentNo',
+  'documentDate', 'plannedDeliveryDate', 'deliveryDate', 'arrivalDateTime', 'acceptanceDate',
+  'acceptanceDateTime', 'invoiceDateTime', 'postingDate',
+  'supplierName', 'sellerTaxId', 'sellerAddress', 'buyerName', 'buyerTaxId', 'buyerAddress', 'customerCode',
+  'goodsName', 'model', 'itemCode', 'batchNo', 'quantity', 'unit',
+  'unitPriceGross', 'unitPriceNet', 'unitPrice', 'amount', 'taxRate', 'taxAmount', 'totalAmount',
+  'carrierName', 'vehiclePlate', 'paymentTerms', 'settlementTerms', 'transportTerms',
+  'controlTransferTerms', 'remarks',
+]
+
+const HIDDEN_ALIAS_FIELDS = new Set(['sellerName', 'supplierAddress', 'supplierTaxId'])
+const TECHNICAL_FIELDS = new Set([
+  'rule_engine_status', 'decision_authority', 'schema_version', 'prompt_version',
+  'receiptDateForCutoff', 'field_evidence_nodes', 'evidence', 'issues', 'audit_log',
+])
+
+function isDisplayableBusinessField(key: string): boolean {
+  return Boolean(key)
+    && !key.startsWith('_')
+    && !key.startsWith('text_excerpt_for_')
+    && !key.startsWith('reason_code')
+    && !HIDDEN_ALIAS_FIELDS.has(key)
+    && !TECHNICAL_FIELDS.has(key)
+    && key !== 'documentType'
+    && key !== 'items'
 }
 
 const SLOT_REASON_KEYS: Record<string, string[]> = {
@@ -53,7 +143,7 @@ const SLOT_REASON_KEYS: Record<string, string[]> = {
 /** 与后端 sample_required_fields 对齐：按本笔已有单据裁剪，不再写死 10 行 */
 const SYSTEM_REQUIRED: Record<string, string[]> = {
   contract: ['contractNo', 'documentNo', 'documentDate', 'buyerName', 'supplierName', 'totalAmount'],
-  order: ['orderNo', 'documentNo', 'contractNo', 'documentDate', 'buyerName', 'quantity', 'totalAmount'],
+  order: ['orderNo', 'documentNo', 'documentDate', 'buyerName', 'quantity', 'totalAmount'],
   delivery: ['documentNo', 'orderNo', 'quantity', 'deliveryDate', 'documentDate'],
   receipt: ['documentNo', 'orderNo', 'quantity', 'acceptanceDate', 'documentDate'],
   invoice: [
@@ -72,8 +162,8 @@ const SYSTEM_REQUIRED: Record<string, string[]> = {
 }
 
 const GOSPD01030_BY_TYPE: Record<string, string[]> = {
-  contract: ['contractNo', 'buyerName'],
-  order: ['orderNo', 'contractNo', 'buyerName', 'quantity', 'totalAmount'],
+  contract: [],
+  order: ['orderNo', 'buyerName', 'quantity', 'totalAmount'],
   invoice: ['invoiceNo', 'buyerName', 'totalAmount', 'postingDate', 'documentDate'],
   receipt: ['acceptanceDate', 'quantity', 'orderNo'],
   delivery: ['deliveryDate', 'quantity', 'orderNo'],
@@ -121,6 +211,7 @@ const COLS: Array<{ id: string; label: string; docTypes: string[] }> = [
 
 const TW_KEY_ALIASES: Record<string, string[]> = {
   suppliername: ['supplier_name', 'supplier'],
+  buyername: ['supplier_name', 'supplier'],
   totalamount: ['total_amount', 'amount'],
   quantity: ['quantity', 'qty'],
   documentdate: ['document_date', 'date'],
@@ -155,6 +246,43 @@ function normalizeLedgerDate(raw: unknown): string {
   const s = String(raw ?? '').trim()
   if (!s) return ''
   return s.slice(0, 10)
+}
+
+function dateValue(raw: string): string {
+  const match = String(raw || '').trim().match(/^\d{4}-\d{1,2}-\d{1,2}/)
+  if (!match) return ''
+  const [year, month, day] = match[0].split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) return ''
+  return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-')
+}
+
+function chronologyResult(columns: CompareColumn[], draftOverlay?: DraftFieldOverlay | null): TimelineResult {
+  const byId = new Map(columns.map((column) => [column.id, column.doc]))
+  const contractDate = cellFieldText(byId.get('contract'), 'documentDate', draftOverlay).text
+  const dates = [
+    ...(contractDate ? [['合同日', contractDate] as const] : []),
+    ['订单日', cellFieldText(byId.get('order'), 'documentDate', draftOverlay).text] as const,
+    [
+      '签收/验收日',
+      cellFieldText(byId.get('receipt'), 'acceptanceDate', draftOverlay).text || cellFieldText(byId.get('receipt'), 'documentDate', draftOverlay).text,
+    ] as const,
+    ['发票日', cellFieldText(byId.get('invoice'), 'documentDate', draftOverlay).text] as const,
+  ]
+  const normalized = dates.map(([label, raw]) => [label, dateValue(raw)] as const)
+  const inverted = normalized.find(([, date], index) => index > 0 && date && normalized[index - 1][1] && date < normalized[index - 1][1])
+  if (inverted) {
+    return { status: 'FAIL', summary: `时序异常：${normalized.map(([label, date]) => `${label} ${date}`).join('，')}；应满足合同日≤订单日≤签收/验收日≤发票日。` }
+  }
+  const invalid = dates.filter(([, raw]) => !dateValue(raw)).map(([label]) => label)
+  if (invalid.length) {
+    return { status: 'REVIEW', summary: `时序待复核：缺少或无法识别${invalid.join('、')}。规则：合同日≤订单日≤签收/验收日≤发票日。` }
+  }
+  return { status: 'PASS', summary: `时序通过：${normalized.map(([label, date]) => `${label} ${date}`).join('，')}。` }
 }
 
 /** 按 ledger_mapping + 已匹配 biz_id 定位序时账原始行 */
@@ -343,6 +471,7 @@ export function buildFieldComparison(
   columns: CompareColumn[]
   rows: CompareRow[]
   docs: ClassifiedDoc[]
+  timing: TimelineResult
 } {
   const docs = docsForChain(job, job.active_chain_id, chainFileNames)
   const columns: CompareColumn[] = COLS.map((c) => ({
@@ -353,10 +482,46 @@ export function buildFieldComparison(
   }))
   const twMap = threeWayRowMap(job)
   const presentCols = columns.filter((c) => c.doc)
-  const spec =
+  const baseSpec =
     requiredRows && requiredRows.length
       ? requiredRows
       : requiredRowsFromDocs(docs, job.goal_ids)
+  const spec = baseSpec.map((row) => ({ ...row, source_types: [...(row.source_types || [])] }))
+  const extractedKeys = new Set<string>()
+  for (const doc of docs) {
+    for (const key of Object.keys(doc.fields || {})) {
+      if (isDisplayableBusinessField(key)) {
+        extractedKeys.add(key)
+      }
+    }
+  }
+  const orderedKeys = [
+    ...EXPANDED_FIELD_ORDER.filter((key) => extractedKeys.has(key)),
+    ...[...extractedKeys].filter((key) => !EXPANDED_FIELD_ORDER.includes(key)).sort(),
+  ]
+  for (const key of orderedKeys) {
+    const sourceTypes = [
+      ...new Set(
+        docs
+          .filter((item) => fieldText(item, key))
+          .map((item) => String(item.doc_type || 'other'))
+          .filter((docType) => docType !== 'other'),
+      ),
+    ]
+    const existing = spec.find((row) => row.key === key)
+    if (existing) {
+      existing.source_types = [...new Set([...(existing.source_types || []), ...sourceTypes])]
+      if (!existing.label) existing.label = FIELD_LABELS[key] || key
+    } else if (sourceTypes.length) {
+      spec.push({ key, label: FIELD_LABELS[key] || key, source_types: sourceTypes })
+    }
+  }
+  const fieldRank = new Map(EXPANDED_FIELD_ORDER.map((key, index) => [key, index]))
+  spec.sort((left, right) => {
+    const leftRank = fieldRank.get(left.key) ?? (EXPANDED_FIELD_ORDER.length + 100)
+    const rightRank = fieldRank.get(right.key) ?? (EXPANDED_FIELD_ORDER.length + 100)
+    return leftRank - rightRank || String(left.label || left.key).localeCompare(String(right.label || right.key), 'zh-CN')
+  })
 
   const rows: CompareRow[] = []
   for (const item of spec) {
@@ -378,8 +543,12 @@ export function buildFieldComparison(
     }
     const ledger = ledgerCell(job, docs, key)
 
+    const manualReviewOnly = MANUAL_REVIEW_FIELDS.has(key)
     let match = true
-    if (applyCols.length === 0) {
+    if (manualReviewOnly) {
+      // 单据号和单据日期各有业务语义，不用跨单据“相等”制造假错配；保留逐格定位和人工确认。
+      match = true
+    } else if (applyCols.length === 0) {
       match = vals.length === 0
     } else if (vals.length === 0) {
       match = false
@@ -392,7 +561,7 @@ export function buildFieldComparison(
     }
 
     const filledApply = applyCols.filter((col) => cells[col.id]).length
-    const hasGap = applyCols.length > 0 && filledApply < applyCols.length
+    const hasGap = !manualReviewOnly && applyCols.length > 0 && filledApply < applyCols.length
     const hasDraft = Object.keys(cellDraft).length > 0
     const baseLabel = item.label || FIELD_LABELS[key] || key
     const qtyHint = key === 'quantity' ? threeWayQtyHint(job) : ''
@@ -408,9 +577,10 @@ export function buildFieldComparison(
       pickReason: threeWayPickReason(job, key),
       quantityRolesHint: qtyHint || undefined,
       cellDraft,
+      manualReviewOnly,
     })
   }
-  return { columns, rows, docs }
+  return { columns, rows, docs, timing: chronologyResult(columns, draftOverlay) }
 }
 
 export function countUnverifiedMismatches(
@@ -419,9 +589,10 @@ export function countUnverifiedMismatches(
   draftOverlay?: DraftFieldOverlay | null,
   requiredRows?: RequiredCompareRow[] | null,
 ): number {
-  const { rows } = buildFieldComparison(job, chainFileNames, draftOverlay, requiredRows)
+  const { rows, timing } = buildFieldComparison(job, chainFileNames, draftOverlay, requiredRows)
   const verified = verifiedFieldKeys(job, job.active_chain_id)
-  return rows.filter((r) => !r.match && !verified.has(r.fieldKey)).length
+  const timingMismatch = timing.status === 'FAIL' ? 1 : 0
+  return rows.filter((r) => !r.match && !verified.has(r.fieldKey)).length + timingMismatch
 }
 
 export function resolveDocForCell(

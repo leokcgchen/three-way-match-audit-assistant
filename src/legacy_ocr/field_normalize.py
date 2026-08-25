@@ -84,6 +84,10 @@ def normalize_extracted_fields(
         "documentDate",
         "deliveryDate",
         "acceptanceDate",
+        "plannedDeliveryDate",
+        "arrivalDateTime",
+        "acceptanceDateTime",
+        "invoiceDateTime",
         "receiptDateForCutoff",
         "postingDate",
     ):
@@ -183,7 +187,7 @@ def normalize_extracted_fields(
             fields[name_key] = cleaned
 
     # 业务编号 OCR：S0 → SO
-    for id_key in ("documentNo", "orderNo", "contractNo"):
+    for id_key in ("documentNo", "orderNo", "contractNo", "invoiceNo", "receiptNo"):
         raw = fields.get(id_key)
         if not raw:
             continue

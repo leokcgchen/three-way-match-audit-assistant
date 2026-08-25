@@ -25,6 +25,7 @@ describe('buildReviewStageNav', () => {
     expect(buildReviewStageNav(makeJob(), 'goals')).toEqual([
       expect.objectContaining({ label: '选择底稿目标', state: 'current' }),
       expect.objectContaining({ label: '上传抽样清单', state: 'locked' }),
+      expect.objectContaining({ label: '总工作台', state: 'locked' }),
       expect.objectContaining({ label: '上传凭证', state: 'locked' }),
       expect.objectContaining({ label: '核对字段', state: 'locked' }),
       expect.objectContaining({ label: '确认结论', state: 'locked' }),
@@ -42,6 +43,7 @@ describe('buildReviewStageNav', () => {
       .toEqual([
         { label: '选择底稿目标', state: 'done' },
         { label: '上传抽样清单', state: 'done' },
+        { label: '总工作台', state: 'available' },
         { label: '上传凭证', state: 'done' },
         { label: '核对字段', state: 'current' },
         { label: '确认结论', state: 'locked' },

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from src.audit.sample_population import chain_in_population, desk_sample_ids
@@ -38,10 +39,12 @@ def _status_fail(blob: Any) -> bool:
 
 
 def sample_tests_failed(sample: dict[str, Any]) -> bool:
-    return any(
+    failed = any(
         _status_fail(sample.get(k))
         for k in ("three_way", "three_way_match", "cutoff_test", "evidence", "amount_test")
     )
+    chronology = (sample.get("three_way") or {}).get("date_chronology") if isinstance(sample.get("three_way"), dict) else {}
+    return failed or str((chronology or {}).get("status") or "").upper() == "FAIL"
 
 
 def _goal_ids(job: dict[str, Any]) -> list[str]:
@@ -274,7 +277,22 @@ def desk_light_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def apply_auto_pass_on_job(job: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """字段齐且无多金额：自动记本笔 fields_confirmed。不写勾稽（交给一键审阅）。"""
-    from src.models.field_values import accept_all_current_fields
+    from src.models.field_values import get_verified_value
+    from src.workflow.field_resolution.evidence_gate import accept_system_verified_fields
+
+    def required_values_verified(docs: list[dict[str, Any]]) -> bool:
+        rows = required_fields_for_docs(docs, goal_ids=goals)
+        for row in rows:
+            key = str(row.get("key") or "")
+            source_types = set(row.get("source_types") or [])
+            candidates = [
+                doc
+                for doc in docs
+                if not source_types or str(doc.get("doc_type") or "") in source_types
+            ]
+            if not any(get_verified_value(doc, key) not in (None, "", "-") for doc in candidates):
+                return False
+        return True
 
     if not is_gospd_mode(job):
         return job, []
@@ -303,8 +321,10 @@ def apply_auto_pass_on_job(job: dict[str, Any]) -> tuple[dict[str, Any], list[st
             if not isinstance(item, dict):
                 continue
             if str(item.get("file_name") or "") in touch:
-                accept_all_current_fields(item, source="auto_fields_ok")
+                accept_system_verified_fields(item)
                 changed_docs = True
+        if not required_values_verified(docs):
+            continue
         sig = fields_signature(docs)
         samples = merge_sample(
             samples,
@@ -411,10 +431,15 @@ def replay_after_sample_replace(job_id: str) -> dict[str, Any]:
                 classified,
                 list(job.get("ledger_rows") or []),
                 dict(job.get("ledger_mapping") or {}),
+                sample_population=job.get("sample_population"),
             )
         except Exception:
             pass
         JOB_STORE.update(job_id, classified=classified)
+    from src.workflow.sample_scope import enforce_sample_scope_on_job
+
+    job = enforce_sample_scope_on_job(job_id)
+    classified = list(job.get("classified") or [])
     JOB_STORE.reset_downstream_keep_ocr(job_id)
     if classified:
         return finish_after_classify(job_id)
@@ -429,6 +454,7 @@ def finish_after_classify(job_id: str) -> dict[str, Any]:
     job = JOB_STORE.get(job_id) or {}
     if not is_gospd_mode(job):
         return job
+    warnings: list[dict[str, str]] = []
     try:
         from src.workflow.amount_ambiguity import enrich_job_ambiguities, scan_job_documents
 
@@ -436,15 +462,38 @@ def finish_after_classify(job_id: str) -> dict[str, Any]:
         enrich_job_ambiguities(job)
         JOB_STORE.update(job_id, classified=list(job.get("classified") or []))
         job = JOB_STORE.get(job_id) or job
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        warnings.append({"step": "amount_ambiguity_scan", "error": str(exc)})
     nxt, passed = apply_auto_pass_on_job(job)
     persist_auto_job(job_id, nxt)
-    if passed:
-        try:
-            run_batch_review(job_id)
-        except Exception:
-            pass
+    report: dict[str, Any]
+    try:
+        result = run_batch_review(job_id, force_rerun=False)
+        failed = list(result.get("failed") or [])
+        report = {
+            "status": "COMPLETED_WITH_ISSUES" if failed or warnings else "COMPLETED",
+            "summary": str(result.get("summary") or ""),
+            "ran": list(result.get("ran") or []),
+            "skipped": list(result.get("skipped") or []),
+            "failed": failed,
+            "need_gate4": list(result.get("need_gate4") or []),
+            "warnings": warnings,
+            "auto_confirmed_fields": list(passed),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        report = {
+            "status": "ERROR",
+            "summary": "自动逐笔审阅未完成",
+            "ran": [],
+            "skipped": [],
+            "failed": [{"chain_id": "", "step": "batch_review", "error": str(exc)}],
+            "need_gate4": [],
+            "warnings": warnings,
+            "auto_confirmed_fields": list(passed),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+    JOB_STORE.update(job_id, auto_review_last_run=report)
     return auto_confirm_passing_conclusions(job_id)
 
 
@@ -452,14 +501,23 @@ def build_desk_chains(job: dict[str, Any]) -> list[dict[str, Any]]:
     classified = list_business_chains(list(job.get("classified") or []))
     by_id = {c["chain_id"]: c for c in classified}
     pop = job.get("sample_population")
+    population_rows = {
+        str(item.get("business_id") or ""): item
+        for item in ((pop or {}).get("rows") or [])
+        if isinstance(item, dict) and item.get("business_id")
+    }
     rows: list[dict[str, Any]] = []
     for cid in desk_sample_ids(job):
         base = dict(by_id.get(cid) or {"chain_id": cid, "doc_count": 0, "doc_types": [], "file_names": []})
         st = desk_row_status(job, cid)
+        population_row = population_rows.get(cid) or {}
+        order_numbers = list(population_row.get("order_numbers") or [])
         row = {
             **base,
             **st,
             "in_sample_population": chain_in_population(cid, pop if isinstance(pop, dict) else None),
+            "order_numbers": order_numbers,
+            "display_index": " & ".join([cid, *order_numbers]),
         }
         # Lazy import keeps the desk status layer independent from the event
         # projection module while still exposing one front-end-ready row.

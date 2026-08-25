@@ -10,8 +10,9 @@ from src.workflow.field_catalog import FIELD_LABELS, SYSTEM_REQUIRED
 # GOSPD01030 填表/三单/截止真正用到的 key，按本笔已有单据裁剪。
 # 入账日来自裁剪序时账，不挡字段确认。
 _GOSPD01030_BY_TYPE: dict[str, tuple[str, ...]] = {
-    "contract": ("contractNo", "buyerName"),
-    "order": ("orderNo", "contractNo", "buyerName", "quantity", "totalAmount"),
+    # 合同是 01030 三单匹配的补强证据，不参与缺字段门禁。
+    "contract": (),
+    "order": ("orderNo", "buyerName", "quantity", "totalAmount"),
     "invoice": ("invoiceNo", "buyerName", "totalAmount", "documentDate"),
     "receipt": ("acceptanceDate", "quantity", "orderNo"),
     "delivery": ("deliveryDate", "quantity", "orderNo"),

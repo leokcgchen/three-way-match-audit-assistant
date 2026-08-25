@@ -39,3 +39,13 @@ it('hides auto-passed rows until 查看已通过 is pressed', async () => {
   await user.click(screen.getByRole('button', { name: '查看已通过 1 笔' }))
   expect(screen.getByText('SO-PASSED')).toBeInTheDocument()
 })
+
+it('explains every status light in complete audit language', () => {
+  render(<SampleDeskList rows={[openRow]} onOpen={vi.fn()} />)
+
+  expect(screen.getByText(/绿色：可以继续或已经通过/)).toBeInTheDocument()
+  expect(screen.getByText(/黄色：需要审计师人工判断/)).toBeInTheDocument()
+  expect(screen.getByText(/红色：必须处理后才能继续/)).toBeInTheDocument()
+  expect(screen.getByText(/灰色：尚未形成判断结果/)).toBeInTheDocument()
+  expect(screen.queryByText(/黄人裁|待人裁|资料缺|字段缺/)).not.toBeInTheDocument()
+})

@@ -122,6 +122,26 @@ def sample_diff_lines(sample: dict[str, Any] | None, *, limit: int = 5) -> list[
         if len(lines) >= limit:
             return lines
 
+    fulfillment = (
+        tw.get("fulfillment") if isinstance(tw.get("fulfillment"), dict) else {}
+    )
+    fulfillment_flags = list(fulfillment.get("flags") or [])
+    if fulfillment_flags:
+        flag_labels = {
+            "STRONG_MODEL_CONFLICT": "规格型号冲突",
+            "PARTIAL_FULFILLMENT": "累计签收不足",
+            "OVER_INVOICE_QTY": "开票数量超过累计签收数量",
+            "OVER_RECEIPT_QTY": "累计签收数量超过订单数量",
+            "DUPLICATE_ALLOCATION": "存在重复分配",
+            "AMBIGUOUS_ALLOCATION": "货物行归属存在歧义",
+        }
+        details = [flag_labels.get(str(flag), str(flag)) for flag in fulfillment_flags]
+        summary = str(fulfillment.get("summary") or "").strip()
+        line = "履约/货物：" + "；".join(dict.fromkeys(details))
+        lines.append(f"{line}（{summary}）" if summary else line)
+        if len(lines) >= limit:
+            return lines
+
     binding = tw.get("document_binding") if isinstance(tw.get("document_binding"), dict) else {}
     if str(binding.get("status") or "").upper() == "FAIL" and binding.get("reason"):
         lines.append(str(binding.get("reason")))

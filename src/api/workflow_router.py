@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -31,6 +32,7 @@ from src.workflow.pipeline import (
     run_amount,
     run_contract,
     run_evidence,
+    cutoff_calendar_mode,
     seed_phase2,
     run_three_way,
 )
@@ -40,6 +42,7 @@ _CHAINS_AMB_SCAN_AT: dict[str, float] = {}
 from src.workflow.recipes import list_workpaper_goals, resolve_workflow_plan
 from src.workflow.three_way_persist import three_way_sample_patch
 from src.workflow.chain_workspace import (
+    chain_complete_set_patch,
     docs_for_chain,
     get_sample,
     is_gospd_mode,
@@ -90,6 +93,19 @@ class PatchFieldsBody(BaseModel):
     file_name: str
     fields: dict[str, Any]
     doc_type: Optional[str] = None
+    custom_doc_type_name: Optional[str] = None
+    doc_type_confirmed: Optional[bool] = None
+
+
+class FieldResolutionRefreshBody(BaseModel):
+    chain_id: str
+    force: bool = False
+
+
+class FieldResolutionDecisionBody(BaseModel):
+    chain_id: str
+    decision: Literal["CONFIRMED", "REJECTED"]
+    reason: str = Field(min_length=2, max_length=500)
 
 
 class ActiveStepBody(BaseModel):
@@ -205,6 +221,10 @@ class ActiveChainBody(BaseModel):
     chain_id: str
 
 
+class CompleteSetBody(BaseModel):
+    complete_set: bool
+
+
 class VisionAmountReviewBody(BaseModel):
     """Advisory input only; field acceptance remains a separate HITL action."""
 
@@ -235,6 +255,10 @@ class ReclassifyBody(BaseModel):
     doc_type: str
 
 
+class DeclareMixedBody(BaseModel):
+    file_name: str
+
+
 class FieldPlanBody(BaseModel):
     by_type: Optional[dict[str, Any]] = None
     global_extra: Optional[list[str]] = None
@@ -244,6 +268,14 @@ class FieldPlanBody(BaseModel):
 class PendingTypeBody(BaseModel):
     file_name: str
     doc_type: str
+
+
+class ProcessFilesBody(BaseModel):
+    file_names: list[str] = Field(default_factory=list)
+
+
+class RecognitionReprocessBody(BaseModel):
+    allow_llm_field_supplement: bool = False
 
 
 class WorkbookRowEditBody(BaseModel):
@@ -321,6 +353,38 @@ def _job_or_404(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+@router.post("/jobs/{job_id}/field-resolution/refresh")
+def refresh_field_resolution(job_id: str, body: FieldResolutionRefreshBody) -> dict[str, Any]:
+    from src.workflow.field_resolution.orchestrator import refresh_comparison_plan
+
+    _job_or_404(job_id)
+    try:
+        return refresh_comparison_plan(
+            job_id,
+            str(body.chain_id or "").strip(),
+            force=bool(body.force),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/field-resolution/edges/{edge_id}/decision")
+def decide_field_resolution_edge(
+    job_id: str, edge_id: str, body: FieldResolutionDecisionBody
+) -> dict[str, Any]:
+    _job_or_404(job_id)
+    try:
+        return JOB_STORE.decide_field_resolution_edge(
+            job_id,
+            chain_id=str(body.chain_id or "").strip(),
+            edge_id=str(edge_id or "").strip(),
+            decision=body.decision,
+            reason=body.reason.strip(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="字段关系不存在") from exc
 
 
 def _ensure_quality_samples(job_id: str, job: dict[str, Any]) -> dict[str, Any]:
@@ -553,7 +617,9 @@ def get_job(job_id: str) -> dict[str, Any]:
     job = JOB_STORE.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return job
+    from src.workflow.sample_scope import enforce_sample_scope_on_job
+
+    return enforce_sample_scope_on_job(job_id)
 
 
 @router.put("/jobs/{job_id}/goals")
@@ -694,6 +760,11 @@ async def post_sample_population_excel(
         note=f"裁剪序时账 {name} · {', '.join(parsed.get('sheets') or [])}",
         rows=parsed.get("rows"),
         sheets=parsed.get("sheets"),
+        primary_key_column=str(parsed.get("primary_key_column") or ""),
+        primary_key_method=str(parsed.get("primary_key_method") or ""),
+        primary_key_confidence=float(parsed.get("primary_key_confidence") or 0.0),
+        primary_key_candidates=list(parsed.get("primary_key_candidates") or []),
+        ambiguous_aliases=list(parsed.get("ambiguous_aliases") or []),
     )
     patch = {
         "sample_population": pop,
@@ -754,6 +825,7 @@ def get_chains(job_id: str) -> dict[str, Any]:
                 or (
                     cid == active and bool(job.get("matching_confirmed"))
                 ),
+                "complete_set": bool(sample.get("complete_set")),
                 "is_active": cid == active,
             }
         )
@@ -764,6 +836,40 @@ def get_chains(job_id: str) -> dict[str, Any]:
         "gospd_mode": is_gospd_mode(job),
         "sample_population": pop,
     }
+
+
+@router.put("/jobs/{job_id}/chains/{chain_id}/complete-set")
+def put_chain_complete_set(
+    job_id: str, chain_id: str, body: CompleteSetBody
+) -> dict[str, Any]:
+    """记录审计师对单笔资料齐套性的声明，并仅失效该笔三单结论。"""
+
+    from src.audit.sample_population import desk_sample_ids
+
+    job = _job_or_404(job_id)
+    valid_ids = set(desk_sample_ids(job)) | {
+        str(row.get("chain_id") or "")
+        for row in list_business_chains(list(job.get("classified") or []))
+    }
+    if chain_id not in valid_ids:
+        raise HTTPException(status_code=404, detail=f"business chain not found: {chain_id}")
+    before = bool(get_sample(job, chain_id).get("complete_set"))
+    patch = chain_complete_set_patch(
+        job,
+        chain_id=chain_id,
+        complete_set=bool(body.complete_set),
+    )
+    updated = JOB_STORE.update(job_id, **patch)
+    append_hitl_event(
+        action="set_chain_complete_set",
+        entity_type="business_chain",
+        entity_id=chain_id,
+        before={"complete_set": before},
+        after={"complete_set": bool(body.complete_set)},
+        reason="审计师声明本笔资料是否已齐套",
+        extra={"job_id": job_id, "chain_id": chain_id},
+    )
+    return updated
 
 
 @router.put("/jobs/{job_id}/active-chain")
@@ -882,8 +988,7 @@ def _build_seed_fields(
     return fields, raw
 
 
-@router.post("/jobs/{job_id}/seed-demo")
-def seed_demo(
+def _legacy_seed_fixture(
     job_id: str,
     extra_dirs: str = Query(
         default="",
@@ -1072,23 +1177,38 @@ def patch_fields(job_id: str, body: PatchFieldsBody) -> dict[str, Any]:
             file_name=body.file_name,
             fields=body.fields,
             doc_type=body.doc_type,
+            custom_doc_type_name=body.custom_doc_type_name,
+            doc_type_confirmed=body.doc_type_confirmed,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     append_hitl_event(
         action="accept_field_batch",
         entity_type="document",
         entity_id=body.file_name,
         before=None,
-        after={"fields": body.fields, "doc_type": body.doc_type},
+        after={
+            "fields": body.fields,
+            "doc_type": body.doc_type,
+            "custom_doc_type_name": body.custom_doc_type_name,
+            "doc_type_confirmed": body.doc_type_confirmed,
+        },
         reason="工作台保存字段",
         extra={"job_id": job_id},
     )
     return job
 
 
+class ConfirmFieldsBody(BaseModel):
+    """The chain displayed by the caller; optional only for legacy clients."""
+
+    chain_id: str = ""
+
+
 @router.post("/jobs/{job_id}/hitl/fields/confirm")
-def confirm_fields(job_id: str) -> dict[str, Any]:
+def confirm_fields(job_id: str, body: ConfirmFieldsBody | None = None) -> dict[str, Any]:
     if not JOB_STORE.get(job_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     from src.workflow.packet_engine import packet_needs_review
@@ -1097,7 +1217,7 @@ def confirm_fields(job_id: str) -> dict[str, Any]:
     if packet_needs_review(job):
         raise HTTPException(status_code=400, detail="请先完成拆包分笔，再确认字段")
     try:
-        job = JOB_STORE.confirm_fields(job_id)
+        job = JOB_STORE.confirm_fields(job_id, chain_id=(body.chain_id if body else None))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     append_hitl_event(
@@ -1105,7 +1225,11 @@ def confirm_fields(job_id: str) -> dict[str, Any]:
         entity_type="job",
         entity_id=job_id,
         before={"confirmed": False},
-        after={"confirmed": True, "sig": job.get("fields_confirm_sig")},
+        after={
+            "confirmed": True,
+            "sig": job.get("fields_confirm_sig"),
+            "chain_id": (body.chain_id if body else ""),
+        },
         reason="工作台确认全部字段",
     )
     return job
@@ -1416,6 +1540,7 @@ async def upload_documents(
     process: bool = Form(False),
     slot_hints: str = Form(""),
     business_hints: str = Form(""),
+    mixed_packet: bool = Form(False),
 ) -> dict[str, Any]:
     from src.workflow.pipeline import save_bytes_to_workdir
 
@@ -1490,8 +1615,19 @@ async def upload_documents(
                 "doc_type": light.get("doc_type") or "other",
                 "doc_type_source": light.get("doc_type_source") or "light",
                 "light_confident": bool(light.get("confident")),
+                "type_uncertain": bool(
+                    (light.get("doc_type") or "other") == "other"
+                    and not mixed_packet
+                ),
                 "declared_business_ids": declared_business_ids,
-                "upload_source": "business_row" if declared_business_ids else "mixed_packet",
+                "mixed_packet_declared": bool(mixed_packet),
+                "upload_source": (
+                    "mixed_packet"
+                    if mixed_packet
+                    else "business_row"
+                    if declared_business_ids
+                    else "standard"
+                ),
             }
         )
 
@@ -1512,10 +1648,27 @@ async def upload_documents(
                 classified,
                 job["ledger_rows"],
                 job["ledger_mapping"],
+                sample_population=job.get("sample_population"),
             )
+        from src.workflow.sample_scope import merge_scope_exceptions, partition_documents_by_sample_scope
+
+        classified, scope_new = partition_documents_by_sample_scope(
+            classified,
+            job.get("sample_population"),
+        )
+        scope_exceptions = merge_scope_exceptions(
+            job.get("scope_exceptions") or [],
+            scope_new,
+            accepted_documents=classified,
+        )
         issues = collect_ocr_issues(classified)
         job = JOB_STORE.set_classified(job_id, classified)
-        job = JOB_STORE.update(job_id, ocr_issues=issues, pending_files=[])
+        job = JOB_STORE.update(
+            job_id,
+            ocr_issues=issues,
+            pending_files=[],
+            scope_exceptions=scope_exceptions,
+        )
     else:
         # 追加待处理队列（同名覆盖）
         merged: dict[str, dict[str, Any]] = {
@@ -1557,6 +1710,81 @@ async def upload_documents(
             reason="从业务仓库行上传，记录可修改的业务预选",
         )
     return job
+
+
+@router.delete("/jobs/{job_id}/scope-exceptions/{exception_id}")
+def delete_scope_exception(job_id: str, exception_id: str) -> dict[str, Any]:
+    """Delete one auditor-confirmed out-of-sample file and every job reference to it."""
+
+    job = _job_or_404(job_id)
+    exceptions = list(job.get("scope_exceptions") or [])
+    target = next(
+        (item for item in exceptions if str(item.get("exception_id") or "") == exception_id),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="抽样边界异常不存在或已处理")
+
+    file_name = str(target.get("file_name") or "")
+    classified = [
+        item
+        for item in (job.get("classified") or [])
+        if str(item.get("file_name") or "") != file_name
+    ]
+    pending = [
+        item
+        for item in (job.get("pending_files") or [])
+        if str(item.get("file_name") or "") != file_name
+    ]
+    packet_units = [
+        item
+        for item in (job.get("packet_units") or [])
+        if str(item.get("source_file") or item.get("file_name") or "") != file_name
+    ]
+
+    candidate_paths: set[str] = set()
+    document = target.get("document") if isinstance(target.get("document"), dict) else {}
+    if document.get("path"):
+        candidate_paths.add(str(document["path"]))
+    for item in [*(job.get("classified") or []), *(job.get("pending_files") or [])]:
+        if str(item.get("file_name") or "") == file_name and item.get("path"):
+            candidate_paths.add(str(item["path"]))
+
+    root = job_workdir(job_id).resolve()
+    resolved_paths: list[Path] = []
+    for raw_path in candidate_paths:
+        path = Path(raw_path).resolve()
+        if not path.is_relative_to(root):
+            raise HTTPException(status_code=409, detail="异常文件路径超出当前任务目录，已阻止删除")
+        resolved_paths.append(path)
+    for path in resolved_paths:
+        if path.is_file():
+            path.unlink()
+
+    remaining = [
+        item
+        for item in exceptions
+        if str(item.get("exception_id") or "") != exception_id
+    ]
+    packet_run = dict(job.get("packet_run") or {})
+    packet_run["files"] = [
+        item
+        for item in (packet_run.get("files") or [])
+        if str(item.get("file_name") or "") != file_name
+    ]
+    packet_run["pages"] = [
+        item
+        for item in (packet_run.get("pages") or [])
+        if str(item.get("source_file") or "") != file_name
+    ]
+    return JOB_STORE.update(
+        job_id,
+        scope_exceptions=remaining,
+        classified=classified,
+        pending_files=pending,
+        packet_units=packet_units,
+        packet_run=packet_run,
+    )
 
 
 @router.get("/field-catalog")
@@ -1609,6 +1837,7 @@ def patch_pending_type(job_id: str, body: PendingTypeBody) -> dict[str, Any]:
             item["doc_type"] = dt
             item["doc_type_source"] = "manual"
             item["light_confident"] = True
+            item["type_uncertain"] = dt == "other"
             found = True
             break
     if not found:
@@ -1713,6 +1942,75 @@ def post_packet_analyze(job_id: str, body: PacketAnalyzeBody | None = None) -> d
     if job is None:
         return _job_or_404(job_id)
     return job
+
+
+@router.post("/jobs/{job_id}/documents/declare-mixed")
+def post_declare_mixed(job_id: str, body: DeclareMixedBody) -> dict[str, Any]:
+    """审计师逐页查看后，将一份已识别 PDF 明确转入人工拆包。"""
+    from src.workflow.packet_engine import empty_packet_run
+
+    job = _job_or_404(job_id)
+    classified = list(job.get("classified") or [])
+    target = next(
+        (
+            item
+            for item in classified
+            if str(item.get("file_name") or "") == body.file_name
+        ),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="当前文件不存在或已转入拆包")
+    path = Path(str(target.get("path") or ""))
+    if path.suffix.lower() != ".pdf" or not path.is_file():
+        raise HTTPException(status_code=400, detail="只有仍可读取的 PDF 文件可以转为混装资料包")
+
+    pending = [
+        item
+        for item in (job.get("pending_files") or [])
+        if str(item.get("file_name") or "") != body.file_name
+    ]
+    pending.append(
+        {
+            "file_name": body.file_name,
+            "path": str(path),
+            "size": path.stat().st_size,
+            "doc_type": "other",
+            "doc_type_source": "human_mixed",
+            "light_confident": False,
+            "type_uncertain": False,
+            "mixed_packet_declared": True,
+            "upload_source": "mixed_packet",
+            "declared_business_ids": list(target.get("declared_business_ids") or []),
+        }
+    )
+    remaining = [
+        item
+        for item in classified
+        if str(item.get("file_name") or "") != body.file_name
+    ]
+    run = empty_packet_run()
+    run["status"] = "pending_analyze"
+    JOB_STORE.invalidate_downstream_from_fields(job_id)
+    updated = JOB_STORE.update(
+        job_id,
+        classified=remaining,
+        pending_files=pending,
+        packet_run=run,
+        packet_units=[],
+        packet_confirmed=False,
+        active_step="packet_unpack",
+    )
+    append_hitl_event(
+        action="declare_mixed_packet",
+        entity_type="document",
+        entity_id=body.file_name,
+        before={"doc_type": target.get("doc_type")},
+        after={"mixed_packet_declared": True, "status": "pending_analyze"},
+        reason="审计师逐页查看后转为混装资料包",
+        extra={"job_id": job_id},
+    )
+    return updated
 
 
 @router.post("/jobs/{job_id}/packet/confirm")
@@ -1821,6 +2119,7 @@ def _run_ocr_background(
     force: bool,
     field_plan: dict[str, Any],
     existing: list[dict[str, Any]],
+    remaining_pending: list[dict[str, Any]],
     ledger_rows: Any,
     ledger_mapping: Any,
 ) -> None:
@@ -1848,30 +2147,72 @@ def _run_ocr_background(
                 classified,
                 ledger_rows,
                 ledger_mapping,
+                sample_population=(JOB_STORE.get(job_id) or {}).get("sample_population"),
             )
+        from src.workflow.sample_scope import merge_scope_exceptions, partition_documents_by_sample_scope
+
+        latest = JOB_STORE.get(job_id) or {}
+        classified, scope_new = partition_documents_by_sample_scope(
+            classified,
+            latest.get("sample_population"),
+        )
+        scope_exceptions = merge_scope_exceptions(
+            latest.get("scope_exceptions") or [],
+            scope_new,
+            accepted_documents=classified,
+        )
         issues = collect_ocr_issues(classified)
         JOB_STORE.set_classified(job_id, classified)
+        processed_names = {str(spec.get("filename") or "") for spec in specs}
+        latest_pending = list((JOB_STORE.get(job_id) or {}).get("pending_files") or [])
+        pending_by_name = {
+            str(item.get("file_name") or ""): item
+            for item in remaining_pending
+            if str(item.get("file_name") or "")
+        }
+        for item in latest_pending:
+            name = str(item.get("file_name") or "")
+            if name and name not in processed_names:
+                pending_by_name[name] = item
         # 先结束 OCR busy，再异步分流/审阅，避免前端长时间假死在「识别中」
         JOB_STORE.update(
             job_id,
             ocr_issues=issues,
             ocr_processing=False,
+            ocr_last_run_at=datetime.now(timezone.utc).isoformat(),
             ocr_processing_message="识别完成，正在后台自动分流与审阅…",
             ocr_progress=None,
-            pending_files=[],
+            pending_files=list(pending_by_name.values()),
+            scope_exceptions=scope_exceptions,
             auto_review_processing=True,
         )
         try:
             from src.workflow.sample_desk import finish_after_classify
 
             finish_after_classify(job_id)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            JOB_STORE.update(
+                job_id,
+                auto_review_last_run={
+                    "status": "ERROR",
+                    "summary": "自动逐笔审阅未完成",
+                    "failed": [
+                        {
+                            "chain_id": "",
+                            "step": "finish_after_classify",
+                            "error": str(exc),
+                        }
+                    ],
+                    "ran": [],
+                    "skipped": [],
+                    "warnings": [],
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
         JOB_STORE.update(
             job_id,
             auto_review_processing=False,
             ocr_processing_message=None,
-            pending_files=[],
         )
     except Exception as exc:
         JOB_STORE.update(
@@ -1885,10 +2226,60 @@ def _run_ocr_background(
         _ocr_threads.pop(job_id, None)
 
 
+@router.post("/jobs/{job_id}/recognition/reprocess")
+def reprocess_recognition(
+    job_id: str,
+    body: RecognitionReprocessBody | None = None,
+) -> dict[str, Any]:
+    """保存旧版本后，以本地文字层和新版确定性规则重新抽取字段。"""
+    from src.workflow.recognition_versions import reprocess_classified_documents
+
+    job = _job_or_404(job_id)
+    options = body or RecognitionReprocessBody()
+    updated = reprocess_classified_documents(
+        job,
+        allow_llm_field_supplement=bool(options.allow_llm_field_supplement),
+    )
+    status = str((updated.get("recognition_reprocess") or {}).get("status") or "")
+    if status != "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail=str((updated.get("recognition_reprocess") or {}).get("error") or "重处理失败，已回滚"),
+        )
+    patch = {key: value for key, value in updated.items() if key != "job_id"}
+    patch["auto_review_processing"] = True
+    JOB_STORE.update(job_id, **patch)
+    try:
+        from src.workflow.sample_desk import finish_after_classify
+
+        finish_after_classify(job_id)
+    except Exception as exc:  # noqa: BLE001
+        JOB_STORE.update(
+            job_id,
+            auto_review_last_run={
+                "status": "ERROR",
+                "summary": "重新识别完成，但自动逐笔审阅未完成",
+                "failed": [
+                    {
+                        "chain_id": "",
+                        "step": "finish_after_classify",
+                        "error": str(exc),
+                    }
+                ],
+                "ran": [],
+                "skipped": [],
+                "warnings": [],
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    return JOB_STORE.update(job_id, auto_review_processing=False)
+
+
 @router.post("/jobs/{job_id}/process")
 def process_pending(
     job_id: str,
     force: bool = False,
+    body: Optional[ProcessFilesBody] = None,
 ) -> dict[str, Any]:
     from src.workflow.field_catalog import auto_confirm_field_plan
 
@@ -1899,6 +2290,29 @@ def process_pending(
             detail="识别仍在进行中，请稍候（可切换菜单，处理不会中断）",
         )
     pending = list(job.get("pending_files") or [])
+    remaining_pending: list[dict[str, Any]] = []
+    requested_raw = list((body.file_names if body else []) or [])
+    requested = [str(name).strip() for name in requested_raw if str(name).strip()]
+    if force:
+        if not requested:
+            raise HTTPException(status_code=400, detail="重新识别必须选择至少一个文件")
+        if len(requested) != len(set(requested)):
+            raise HTTPException(status_code=400, detail="重新识别文件名不得重复")
+        available = {
+            str(item.get("file_name") or "").strip()
+            for item in [*pending, *(job.get("classified") or [])]
+            if str(item.get("file_name") or "").strip()
+        }
+        unknown = [name for name in requested if name not in available]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"找不到待重新识别文件: {', '.join(unknown)}")
+        selected = set(requested)
+        remaining_pending = [
+            item
+            for item in pending
+            if str(item.get("file_name") or "").strip() not in selected
+        ]
+        pending = [item for item in pending if str(item.get("file_name") or "").strip() in selected]
     if not pending and not force:
         if job.get("classified"):
             return job
@@ -1915,9 +2329,45 @@ def process_pending(
             packet_status,
         )
 
-        pending = annotate_pending_kinds(pending)
-        job = JOB_STORE.update(job_id, pending_files=pending)
-        if packet_blocks_process(job):
+        all_pending = annotate_pending_kinds(
+            [*remaining_pending, *pending] if force else pending
+        )
+        if requested and not force:
+            available = {
+                str(item.get("file_name") or "").strip()
+                for item in all_pending
+                if str(item.get("file_name") or "").strip()
+            }
+            unknown = [name for name in requested if name not in available]
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"找不到待处理文件: {', '.join(unknown)}")
+            selected = set(requested)
+            pending = [
+                item
+                for item in all_pending
+                if str(item.get("file_name") or "").strip() in selected
+            ]
+            remaining_pending = [
+                item
+                for item in all_pending
+                if str(item.get("file_name") or "").strip() not in selected
+            ]
+        else:
+            by_name = {
+                str(item.get("file_name") or ""): item
+                for item in all_pending
+            }
+            pending = [
+                by_name.get(str(item.get("file_name") or ""), item)
+                for item in pending
+            ]
+            remaining_pending = [
+                by_name.get(str(item.get("file_name") or ""), item)
+                for item in remaining_pending
+            ]
+        job = JOB_STORE.update(job_id, pending_files=all_pending)
+        process_job = {**job, "pending_files": pending}
+        if packet_blocks_process(process_job):
             st = packet_status(job)
             need_analyze = st in {"idle", "pending_analyze", "analyzing", ""} or not (
                 job.get("packet_units") or []
@@ -1966,6 +2416,7 @@ def process_pending(
             "content": path.read_bytes(),
             "slot_hint": item.get("slot_hint") or "",
             "doc_type": item.get("doc_type") or "",
+            "declared_business_ids": list(item.get("declared_business_ids") or []),
         }
         if isinstance(item.get("source_packet"), dict):
             spec["source_packet"] = item["source_packet"]
@@ -1978,6 +2429,8 @@ def process_pending(
 
     if force and job.get("classified"):
         for doc in job["classified"]:
+            if str(doc.get("file_name") or "").strip() not in set(requested):
+                continue
             p = Path(str(doc.get("path") or ""))
             if p.is_file():
                 specs.append(
@@ -1992,6 +2445,7 @@ def process_pending(
     JOB_STORE.update(
         job_id,
         ocr_processing=True,
+        ocr_has_run=True,
         ocr_processing_message=f"排队识别 {len(specs)} 个文件…",
         ocr_progress={"done": 0, "total": len(specs), "file": ""},
     )
@@ -2002,7 +2456,8 @@ def process_pending(
             "specs": specs,
             "force": force,
             "field_plan": field_plan,
-            "existing": [] if force else (job.get("classified") or []),
+            "existing": job.get("classified") or [],
+            "remaining_pending": remaining_pending,
             "ledger_rows": job.get("ledger_rows"),
             "ledger_mapping": job.get("ledger_mapping"),
         },
@@ -2211,6 +2666,7 @@ async def upload_ledger(
             job["classified"],
             rows,
             mapping,
+            sample_population=job.get("sample_population"),
         )
         job = JOB_STORE.update(job_id, classified=classified)
         JOB_STORE.invalidate_downstream_from_fields(job_id)
@@ -2231,6 +2687,7 @@ def apply_ledger(job_id: str, body: LedgerApplyBody | None = None) -> dict[str, 
         list(job.get("classified") or []),
         job["ledger_rows"],
         mapping,
+        sample_population=job.get("sample_population"),
     )
     JOB_STORE.invalidate_downstream_from_fields(job_id)
     return JOB_STORE.update(
@@ -2314,6 +2771,7 @@ def post_reclassify(job_id: str, body: ReclassifyBody) -> dict[str, Any]:
             classified,
             job["ledger_rows"],
             job["ledger_mapping"],
+            sample_population=job.get("sample_population"),
         )
     JOB_STORE.invalidate_downstream_from_fields(job_id)
     job = JOB_STORE.update(job_id, classified=classified)
@@ -2458,14 +2916,20 @@ def post_three_way_cutoff(job_id: str, body: ThreeWayCutoffBody | None = None) -
         raise _http_from_value(exc, job=JOB_STORE.get(job_id)) from exc
 
     manual = body.manual or job.get("manual_three_way") or {}
+    sample = get_sample(job, chain_id) if chain_id else {}
     # receipt_idx 相对当前链单据列表
     result = run_three_way(
         classified,
         manual=manual,
         selected_receipt_idx=body.receipt_idx,
         period_end=job.get("period_end"),
-        calendar_mode=job.get("calendar_mode"),
+        calendar_mode=cutoff_calendar_mode(job.get("goal_ids") or [], job.get("calendar_mode")),
         fiscal_year_start=job.get("fiscal_year_start"),
+        complete_set=bool(sample.get("complete_set")),
+        business_group_id=chain_id,
+        business_binding_confirmed=bool(
+            chain_id and (job.get("business_group_confirmations") or {}).get(chain_id)
+        ),
     )
     if chain_id:
         job = JOB_STORE.save_chain_sample(

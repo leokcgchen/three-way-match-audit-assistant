@@ -70,6 +70,8 @@ def three_way_sample_patch(
             "quantity_roles": result.get("quantity_roles") or {},
             "slot_reasons": result.get("slot_reasons") or {},
             "erp_review": result.get("erp_review") or {},
+            "fulfillment": result.get("fulfillment") or {},
+            "invoice_checks": result.get("invoice_checks") or [],
         },
         "cutoff_test": {
             "status": result.get("cutoff_status") or "NOT_TESTED",
@@ -81,6 +83,7 @@ def three_way_sample_patch(
             "result": result.get("cutoff_result"),
             "available": bool(result.get("cutoff_available")),
             "skipped_reason": result.get("cutoff_skipped_reason"),
+            "invoice_checks": result.get("invoice_checks") or [],
         },
     }
     if manual is not None:

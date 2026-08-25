@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Job } from '../types'
 
@@ -51,7 +51,7 @@ const job: Job = {
 }
 
 describe('SampleWorkbenchPage clarity controls', () => {
-  it('explains every status count and groups the header actions', async () => {
+  it('explains every status count without exposing upload or period controls', async () => {
     const { container } = render(
       <SampleWorkbenchPage job={job} onJob={vi.fn()} onGo={vi.fn()} />,
     )
@@ -74,27 +74,25 @@ describe('SampleWorkbenchPage clarity controls', () => {
     )
     expect(screen.queryByText(/黄人裁/)).not.toBeInTheDocument()
 
-    const actions = container.querySelector('.desk-head-actions')
-    expect(actions).toContainElement(screen.getByRole('button', { name: '上传混装资料包' }))
-    expect(actions).toHaveTextContent('更换抽样清单')
+    expect(screen.getByRole('heading', { name: '总工作台' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '上传混装资料包' })).not.toBeInTheDocument()
+    expect(screen.queryByText('更换抽样清单')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('期末')).not.toBeInTheDocument()
+    expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument()
   })
 
-  it('shows one concise next action instead of the duplicated process list', async () => {
+  it('leaves the next-action guidance on the sample-list upload page', async () => {
     const noPeriodJob = {
       ...job,
       goal_ids: ['gospd01020'],
       plan: { ...job.plan, goal_ids: ['gospd01020'] },
     }
-    const { container } = render(
+    render(
       <SampleWorkbenchPage job={noPeriodJob} onJob={vi.fn()} onGo={vi.fn()} />,
     )
 
-    expect(await screen.findByText('上传凭证（可一次多笔）')).toBeInTheDocument()
-    expect(screen.queryByText('查看当前处理说明')).not.toBeInTheDocument()
-    const card = screen.getByRole('region', { name: '下一步' })
-    expect(within(card).getByText('上传凭证（可一次多笔）')).toBeInTheDocument()
-    expect(within(card).queryByRole('list')).not.toBeInTheDocument()
-    expect(within(card).getAllByRole('button')).toHaveLength(1)
-    expect(container.querySelectorAll('.btn.primary')).toHaveLength(1)
+    expect(await screen.findByRole('heading', { name: '总工作台' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '下一步' })).not.toBeInTheDocument()
+    expect(screen.queryByText('当前流程指引')).not.toBeInTheDocument()
   })
 })

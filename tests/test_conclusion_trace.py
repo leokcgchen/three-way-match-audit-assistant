@@ -74,6 +74,30 @@ def test_build_trace_can_scope_to_one_chain():
     assert len(full["findings"]) >= len(scoped["findings"])
 
 
+def test_three_way_finding_keeps_one_to_many_fulfillment_evidence():
+    fulfillment = {
+        "light": "RED",
+        "complete_set": True,
+        "flags": ["SET_CLAIMED_INCOMPLETE"],
+        "rows": [{"ordered_qty": "100", "received_qty": "100", "invoiced_qty": "70"}],
+    }
+    job = {
+        "classified": [],
+        "three_way": {
+            "three_way_status": "FAIL",
+            "decision": "HOLD_REVIEW",
+            "fulfillment": fulfillment,
+        },
+        "finding_acknowledgements": {},
+        "plan": {"goal_ids": []},
+    }
+
+    trace = build_conclusion_trace(job)
+    finding = next(item for item in trace["findings"] if item["module"] == "three_way")
+
+    assert finding["fulfillment"] == fulfillment
+
+
 def test_confirm_conclusion_requires_finding_ack():
     job = JOB_STORE.create(title="trace-gate")
     jid = job["job_id"]

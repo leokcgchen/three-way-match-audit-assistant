@@ -40,10 +40,13 @@ def _post_upload(
     *,
     file_name: str = "two-page.pdf",
     business_hints: str | None = None,
+    mixed_packet: bool = False,
 ):
     data = {"process": "false"}
     if business_hints is not None:
         data["business_hints"] = business_hints
+    if mixed_packet:
+        data["mixed_packet"] = "true"
     return client.post(
         f"/api/v1/workflow/jobs/{job_id}/upload",
         files=[("files", (file_name, _pdf_bytes(2), "application/pdf"))],
@@ -65,7 +68,8 @@ def test_upload_saves_business_hint_as_unconfirmed_pending_context() -> None:
     [pending] = response.json()["pending_files"]
     assert pending["declared_business_ids"] == ["SO25-0281"]
     assert pending["upload_source"] == "business_row"
-    assert pending["packet_kind"] == "packet_single_chain"
+    assert pending["packet_kind"] == "standard"
+    assert pending["mixed_packet_declared"] is False
 
 
 def test_upload_rejects_invalid_business_hint_json() -> None:
@@ -137,6 +141,7 @@ def test_packet_analyze_keeps_row_hint_as_preselection(monkeypatch) -> None:
         client,
         job["job_id"],
         business_hints=json.dumps({"two-page.pdf": ["SO25-0281"]}),
+        mixed_packet=True,
     )
     assert uploaded.status_code == 200
 
@@ -151,7 +156,7 @@ def test_packet_analyze_keeps_row_hint_as_preselection(monkeypatch) -> None:
     assert all(unit["boundary_confirmed"] is False for unit in units)
 
 
-def test_upload_without_business_hints_keeps_legacy_shape() -> None:
+def test_upload_without_business_hints_is_standard_by_default() -> None:
     job = _job_with_sample("SO25-0281")
     client = TestClient(app)
 
@@ -160,4 +165,5 @@ def test_upload_without_business_hints_keeps_legacy_shape() -> None:
     assert response.status_code == 200
     [pending] = response.json()["pending_files"]
     assert pending.get("declared_business_ids") in (None, [])
-    assert pending.get("upload_source") in (None, "mixed_packet")
+    assert pending.get("upload_source") == "standard"
+    assert pending.get("mixed_packet_declared") is False

@@ -21,7 +21,11 @@ export type WorkflowPlan = {
 export type ClassifiedDoc = {
   file_name: string
   path?: string
+  file_fingerprint?: string
   doc_type: string
+  custom_doc_type_name?: string
+  doc_type_confirmed?: boolean
+  type_uncertain?: boolean
   ocr_source?: string
   raw_text?: string
   text_blocks?: unknown[]
@@ -44,10 +48,144 @@ export type ClassifiedDoc = {
   ledger_match_manual?: boolean
   ledger_evaluated?: boolean
   ledger_match_message?: string
+  sample_business_id?: string
+  business_index_source?: string
+  business_index_candidates?: Array<{ value: string; source: string }>
+  business_index_status?: 'MATCHED' | 'CONFLICT' | 'AMBIGUOUS_ALIAS' | 'SIMILAR_CANDIDATE' | 'UNASSIGNED'
+  business_index_confidence?: 'highest' | 'high' | 'conflict' | 'review' | 'none'
+  business_index_evidence?: Array<{
+    type?: 'business_id' | 'order_number' | string
+    detected?: string
+    matched?: string
+    source?: string
+    match_method?: string
+    business_ids?: string[]
+  }>
+  ledger_query_biz_id?: string
+  ledger_index_column?: string
+  ledger_match_reason?: {
+    code?: string
+    message?: string
+    document_index?: string | null
+    document_index_source?: string | null
+    ledger_index_column?: string | null
+    query_value?: string | null
+  }
   manual_override?: boolean
   excluded_from_match?: boolean
   business_group_id?: string
   business_group_manual?: boolean
+  field_evidence_nodes?: FieldEvidenceNode[]
+  field_evidence_history?: FieldEvidenceNode[]
+}
+
+export type FieldEvidenceNode = {
+  schema_version?: string
+  evidence_id: string
+  document_id: string
+  document_role: string
+  field_key: string
+  raw_value: unknown
+  normalized_value?: unknown
+  excerpt: string
+  page?: number | null
+  char_start?: number | null
+  char_end?: number | null
+  bbox?: number[] | null
+  anchor_status?: string
+  usable_for_decision?: boolean
+  metadata?: { file_name?: string; [key: string]: unknown }
+}
+
+export type ResolutionValue = {
+  evidence_id: string
+  document_id?: string
+  document_role?: string
+  field_key?: string
+  value?: unknown
+  page?: number | null
+  excerpt?: string
+}
+
+export type ExplainableComparisonRow = {
+  row_id: string
+  edge_id?: string
+  concept: string
+  label: string
+  result: string
+  relation_type?: string
+  reason_code?: string
+  reason_text?: string
+  evidence_ids: string[]
+  values?: ResolutionValue[]
+  transformations?: string[]
+  counter_evidence?: Array<Record<string, unknown>>
+  calculation?: string
+  reason_codes?: string[]
+}
+
+export type BusinessChronology = {
+  events: Array<{
+    label: string
+    value: string
+    evidence_id?: string
+    document_id?: string
+    page?: number | null
+  }>
+  reporting_period_end?: string | null
+  status: string
+  reason_text?: string
+}
+
+export type ResolutionIssue = {
+  issue_code: string
+  severity: string
+  title: string
+  message: string
+  edge_id: string
+  evidence_ids: string[]
+  values?: string[]
+  resolution_status?: string
+}
+
+export type ComparisonPlan = {
+  schema_version: string
+  chain_id: string
+  overall_status: string
+  three_way_status: string
+  cutoff_status: string
+  domains: {
+    consistency: ExplainableComparisonRow[]
+    recalculation: ExplainableComparisonRow[]
+    chronology: BusinessChronology
+    document_specific: Array<{
+      row_id: string
+      field_key: string
+      label: string
+      value: unknown
+      document_id?: string
+      document_role?: string
+      evidence_id?: string
+      page?: number | null
+      comparison_effect?: string
+    }>
+    issues: ResolutionIssue[]
+  }
+}
+
+export type FieldResolution = {
+  schema_version: string
+  resolution_id: string
+  source_hash: string
+  chain_id: string
+  generated_at?: string
+  cache_hit?: boolean
+  evidence_nodes: FieldEvidenceNode[]
+  edges: Array<Record<string, unknown>>
+  line_groups: Array<Record<string, unknown>>
+  comparison_plan: ComparisonPlan
+  issues: ResolutionIssue[]
+  audit_log: Array<Record<string, unknown>>
 }
 
 export type RelationRow = {
@@ -269,12 +407,17 @@ export type Job = {
   advisory_candidates?: AdvisoryCandidate[]
   ocr_issues?: Array<Record<string, unknown>> | string[]
   ocr_processing?: boolean
+  ocr_has_run?: boolean
+  ocr_last_run_at?: string | null
   auto_review_processing?: boolean
   ocr_processing_message?: string | null
   ocr_progress?: { done: number; total: number; file?: string } | null
   active_chain_id?: string | null
   updated_at?: string | null
-  gospd_sample_results?: Record<string, Record<string, unknown>> | null
+  gospd_sample_results?: Record<
+    string,
+    Record<string, unknown> & { field_resolution?: FieldResolution }
+  > | null
   field_plan?: FieldPlan | null
   workbook_row_edits?: Record<string, Record<string, Record<string, unknown>>> | null
   finding_acknowledgements?: Record<
@@ -293,16 +436,46 @@ export type Job = {
     doc_type?: string
     doc_type_source?: string
     light_confident?: boolean
+    type_uncertain?: boolean
     packet_kind?: string
     page_count?: number
     from_packet?: boolean
+    mixed_packet_declared?: boolean
     declared_business_ids?: string[]
-    upload_source?: 'business_row' | 'mixed_packet'
+    upload_source?: 'standard' | 'business_row' | 'mixed_packet'
   }>
+  scope_exceptions?: SampleScopeException[]
   packet_run?: PacketRun | null
   packet_units?: PacketUnit[]
   packet_confirmed?: boolean
   review_event_decisions?: Record<string, Record<string, unknown>>
+}
+
+export type SampleScopeException = {
+  exception_id: string
+  file_name: string
+  scope_status:
+    | 'OUT_OF_SAMPLE'
+    | 'MIXED_SCOPE'
+    | 'UNASSIGNED'
+    | 'INDEX_CONFLICT'
+    | 'AMBIGUOUS_ALIAS'
+    | 'SIMILAR_CANDIDATE'
+  detected_business_ids: string[]
+  declared_business_ids?: string[]
+  reason: string
+  candidate_business_ids?: string[]
+  business_index_evidence?: ClassifiedDoc['business_index_evidence']
+  similar_candidates?: Array<{
+    detected?: string
+    matched?: string
+    types?: string[]
+    business_ids?: string[]
+    match_method?: string
+  }>
+  recommended_action: 'delete' | 'review'
+  created_at?: string
+  document?: Record<string, unknown>
 }
 
 export type FieldPlanSlot = {
@@ -383,6 +556,7 @@ export type ConclusionFinding = {
   quantity_roles?: Record<string, unknown>
   slot_reasons?: Record<string, string>
   erp_review?: { status?: string; note?: string }
+  fulfillment?: import('./lib/threeWayDecision').ThreeWayFulfillment | null
   go_field_confirm?: boolean
   retest_path?: string
   acknowledged?: boolean

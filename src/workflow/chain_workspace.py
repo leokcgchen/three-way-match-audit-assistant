@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from src.reporting.gospd01010_filler import group_classified_by_chain
+from src.workflow.business_grouping import group_documents_by_business
 from src.workflow.recipes import STEP_AMOUNT, STEP_CONTRACT, STEP_THREE_WAY
 
 
@@ -35,11 +35,10 @@ def primary_gospd_format(job: dict[str, Any]) -> Optional[str]:
     return None
 
 
-
 def list_business_chains(classified: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """列出当前单据中的业务链摘要。"""
     rows: list[dict[str, Any]] = []
-    for chain_id, docs in group_classified_by_chain(list(classified or [])):
+    for chain_id, docs in group_documents_by_business(list(classified or [])):
         types = sorted({str(d.get("doc_type") or "") for d in docs if d.get("doc_type")})
         rows.append(
             {
@@ -58,7 +57,7 @@ def docs_for_chain(
     cid = str(chain_id or "").strip()
     if not cid:
         return list(classified or [])
-    for c_id, docs in group_classified_by_chain(list(classified or [])):
+    for c_id, docs in group_documents_by_business(list(classified or [])):
         if c_id == cid:
             return list(docs)
     return []
@@ -187,6 +186,34 @@ def merge_sample(
     return out
 
 
+def chain_complete_set_patch(
+    job: dict[str, Any], *, chain_id: str, complete_set: bool
+) -> dict[str, Any]:
+    """生成逐笔齐套声明补丁；保留独立截止性结果和当前业务游标。"""
+
+    samples = merge_sample(
+        job.get("gospd_sample_results") or {},
+        chain_id=chain_id,
+        patch={
+            "complete_set": bool(complete_set),
+            "three_way": None,
+            "three_way_match": None,
+            "conclusion_confirmed": False,
+            "conclusion_confirm_sig": None,
+        },
+    )
+    probe = {**job, "gospd_sample_results": samples}
+    patch: dict[str, Any] = {
+        "gospd_sample_results": samples,
+        "conclusion_confirmed": all_chains_conclusion_confirmed(probe),
+        "workbook_path": None,
+        "workbook_paths": [],
+    }
+    if str(job.get("active_chain_id") or "") == chain_id:
+        patch.update(mirror_sample_to_job_fields(samples[chain_id]))
+    return patch
+
+
 def mirror_sample_to_job_fields(sample: dict[str, Any]) -> dict[str, Any]:
     """把当前笔结果镜像到 job 顶层，供现有 UI / 门禁读取。"""
     # 有测过/确认过的样本：字段视为该笔已核对（兼容旧样本无 fields_confirmed）
@@ -258,7 +285,7 @@ def chain_ids_touching_files(
     want = {str(x) for x in file_names if x}
     if not want:
         return touched
-    for cid, docs in group_classified_by_chain(list(classified or [])):
+    for cid, docs in group_documents_by_business(list(classified or [])):
         names = {str(d.get("file_name") or "") for d in docs}
         if names & want:
             touched.add(cid)

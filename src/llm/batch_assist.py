@@ -106,11 +106,9 @@ KNOWN_CLARITY_CODES: Dict[str, Tuple[str, str]] = {
 
 
 def batch_llm_assist_enabled() -> bool:
-    raw = (
-        os.getenv("BATCH_LLM_ASSIST")
-        or getattr(settings, "BATCH_LLM_ASSIST", None)
-        or "1"
-    )
+    raw = os.getenv("BATCH_LLM_ASSIST")
+    if raw is None or not str(raw).strip():
+        return False
     flag = str(raw).strip().lower()
     if flag in {"0", "false", "off", "no", "disable", "disabled"}:
         return False

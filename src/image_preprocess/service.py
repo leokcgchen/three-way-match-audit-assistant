@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from time import perf_counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -14,12 +15,15 @@ import numpy as np
 from config.settings import settings
 from src.utils.logger import logger
 
-from .color_scan import confident_document_warp, evaluate_photo_enhance_trigger
+from .color_scan import apply_color_scan, confident_document_warp, evaluate_photo_enhance_trigger
 from .fast_image import (
     WorkingImage,
+    apply_fast_recipe,
     decode_working_image,
     encode_delivery_jpeg,
+    route_defects,
     rotate_with_white_canvas,
+    thumbnail_statistics,
 )
 from .quality import estimate_deskew
 
@@ -140,12 +144,80 @@ def _apply_l1_geometry(pixels: np.ndarray, source_path: Path) -> tuple[np.ndarra
     return out, meta
 
 
+def _enhancement_quality_passes(
+    source: np.ndarray,
+    candidate: np.ndarray,
+    route_name: str,
+) -> tuple[bool, dict[str, float]]:
+    """用小缩略图拦截明显退化，不增加第二次 OCR。"""
+    before = thumbnail_statistics(source)
+    after = thumbnail_statistics(candidate)
+    contrast_floor = max(8.0, before.percentile_contrast * 0.80)
+    sharpness_floor = max(8.0, before.laplacian_variance * 0.55)
+    edge_floor = max(0.001, before.edge_density * 0.60)
+    contrast_ok = after.percentile_contrast >= contrast_floor
+    illumination_ok = after.illumination_spread <= max(8.0, before.illumination_spread * 0.85)
+    passed = (
+        (illumination_ok if route_name == "shadow" else contrast_ok)
+        and after.laplacian_variance >= sharpness_floor
+        and after.edge_density >= edge_floor
+    )
+    return passed, {
+        "contrast_before": round(before.percentile_contrast, 2),
+        "contrast_after": round(after.percentile_contrast, 2),
+        "illumination_spread_before": round(before.illumination_spread, 2),
+        "illumination_spread_after": round(after.illumination_spread, 2),
+        "sharpness_before": round(before.laplacian_variance, 2),
+        "sharpness_after": round(after.laplacian_variance, 2),
+        "edge_density_before": round(before.edge_density, 4),
+        "edge_density_after": round(after.edge_density, 4),
+    }
+
+
+def _apply_targeted_enhancement(pixels: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """最多生成一个增强候选；失败或质量退化时回退。"""
+    started = perf_counter()
+    route = route_defects(pixels)
+    meta: dict[str, Any] = {
+        "enhancement_route": route.name,
+        "enhancement_applied": False,
+        "enhancement_status": "skipped_line_art" if route.name == "line_art" else "pending",
+    }
+    if route.name == "line_art":
+        meta["enhancement_elapsed_ms"] = round((perf_counter() - started) * 1000, 1)
+        return pixels, meta
+
+    try:
+        if route.name in {"balanced", "low_contrast"}:
+            candidate = apply_color_scan(pixels)
+            meta["enhancement_recipe"] = "color_scan"
+        else:
+            candidate = apply_fast_recipe(pixels, route, 0)
+            meta["enhancement_recipe"] = f"fast_{route.name}_v0"
+        passed, quality = _enhancement_quality_passes(pixels, candidate, route.name)
+        meta["enhancement_quality"] = quality
+        if not passed:
+            meta["enhancement_status"] = "fallback_quality"
+            return pixels, meta
+        meta["enhancement_applied"] = True
+        meta["enhancement_status"] = "applied"
+        return candidate, meta
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("图片增强失败，回退几何校正图 route={} err={}", route.name, exc)
+        meta["enhancement_status"] = "fallback_error"
+        meta["enhancement_error"] = str(exc)
+        return pixels, meta
+    finally:
+        meta["enhancement_elapsed_ms"] = round((perf_counter() - started) * 1000, 1)
+
+
 def prepare_for_ocr(
     source_path: str | Path,
     *,
     cache_dir: Path | None = None,
 ) -> PreprocessResult:
     """返回 OCR 应读取的路径；预处理图与原件分离，预览/高亮走 ocr_image_path。"""
+    preprocess_started = perf_counter()
     src = Path(source_path).resolve()
     if not preprocess_enabled() or not _is_raster_image(src):
         return PreprocessResult(
@@ -185,6 +257,9 @@ def prepare_for_ocr(
         )
 
     pixels, geom_meta = _apply_l1_geometry(working.pixels, src)
+    pixels, enhancement_meta = _apply_targeted_enhancement(pixels)
+    if enhancement_meta.get("enhancement_applied"):
+        geom_meta["steps"].append("enhance")
     jpeg_bytes, quality = encode_delivery_jpeg(pixels)
     out_dir = cache_dir or (src.parent / "_ocr_work")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -195,8 +270,10 @@ def prepare_for_ocr(
         "median_luminance": round(trigger.median_luminance, 1),
         "trigger_reason": trigger.reason,
         "jpeg_quality": quality,
+        **enhancement_meta,
         **geom_meta,
     }
+    meta["preprocess_elapsed_ms"] = round((perf_counter() - preprocess_started) * 1000, 1)
     logger.info(
         "L1 预处理完成 src={} out={} steps={}",
         src.name,
@@ -206,7 +283,7 @@ def prepare_for_ocr(
     return PreprocessResult(
         source_path=src,
         ocr_path=out_path,
-        profile="l1_geometry",
+        profile="l1_enhanced" if enhancement_meta.get("enhancement_applied") else "l1_geometry",
         applied=True,
         meta=meta,
     )

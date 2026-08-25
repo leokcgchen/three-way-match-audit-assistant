@@ -1,0 +1,76 @@
+{
+  "task_id": "MOCK-1N-COMPLETE",
+  "complete_set": true,
+  "note": "1 order + 3 receipts without a total line + 1 invoice; qty 30+40+30=100, amount 300+400+300=1000",
+  "classified": [
+    {
+      "file_name": "PO_SO001.pdf",
+      "doc_type": "order",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "SO001",
+        "documentDate": "2026-01-02",
+        "supplierName": "Supplier A",
+        "buyerName": "Buyer A",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "100", "unit": "PCS", "unitPrice": "10", "amount": "1000"}
+        ]
+      }
+    },
+    {
+      "file_name": "GRN_POD001.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD001",
+        "documentDate": "2026-01-03",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "30", "unit": "PCS", "amount": "300"}
+        ]
+      }
+    },
+    {
+      "file_name": "GRN_POD002.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD002",
+        "documentDate": "2026-01-04",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "40", "unit": "PCS", "amount": "400"}
+        ]
+      }
+    },
+    {
+      "file_name": "GRN_POD003.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD003",
+        "documentDate": "2026-01-05",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "30", "unit": "PCS", "amount": "300"}
+        ]
+      }
+    },
+    {
+      "file_name": "INV_INV001_complete.pdf",
+      "doc_type": "invoice",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "INV001",
+        "documentDate": "2026-01-06",
+        "supplierName": "Supplier A",
+        "buyerName": "Buyer A",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "100", "unit": "PCS", "unitPrice": "10", "amount": "1000"}
+        ]
+      }
+    }
+  ]
+}

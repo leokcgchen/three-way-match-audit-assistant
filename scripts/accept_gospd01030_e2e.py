@@ -256,8 +256,7 @@ def main() -> int:
     assert job.get("period_end") == PERIOD_END
     ok(f"job={jid} period_end={PERIOD_END}")
 
-    step("seed-demo SO25-0281 (fast)")
-    job = call("POST", f"/api/v1/workflow/jobs/{jid}/seed-demo?fast=true")
+    raise RuntimeError("快速注入验收已移除；请运行 scripts/accept_gospd01030_ocr_e2e.py，使用明确的 PDF 夹具完成正式上传与识别。")
     classified = _ensure_cross_refs(jid, list(job.get("classified") or []))
     if len(classified) < 4:
         raise RuntimeError(f"seed 单据不足: {len(classified)}")

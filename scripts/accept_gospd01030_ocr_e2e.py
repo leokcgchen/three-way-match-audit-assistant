@@ -1,6 +1,6 @@
 """GOSPD01030 真 OCR 端到端（upload→field-plan→process→门禁→导出）。
 
-比 seed-demo 慢且依赖 OCR Key。默认仍建议先跑 accept_gospd01030_e2e.py。
+依赖 OCR Key，并使用明确的本地 PDF 夹具执行正式上传与识别。
 
 用法:
   set PYTHONPATH=.
@@ -141,7 +141,7 @@ def main() -> int:
     if not classified:
         raise RuntimeError("OCR 未产出 classified")
     sources = {c.get("ocr_source") for c in classified}
-    if sources <= {"demo_seed", "mock"}:
+    if sources <= {"mock"}:
         raise RuntimeError(f"期望真 OCR，实际 sources={sources}")
     ok(f"OCR docs={len(classified)} sources={sorted(sources)}")
 

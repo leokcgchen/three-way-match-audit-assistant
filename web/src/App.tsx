@@ -9,10 +9,12 @@ import { WorkbookPage } from './pages/WorkbookPage'
 import { HardCasesPage } from './pages/HardCasesPage'
 import { PromptLabPage } from './pages/PromptLabPage'
 import { SampleWorkbenchPage } from './pages/SampleWorkbenchPage'
+import { SampleListUploadPage } from './pages/SampleListUploadPage'
 import { PacketUnpackPage } from './pages/PacketUnpackPage'
 import { EventReviewPage } from './pages/EventReviewPage'
 import { TipHost } from './components/TipHost'
 import { MastheadProgress } from './components/MastheadProgress'
+import { WorkflowStageGuideCard } from './components/WorkflowStageGuideCard'
 import { packetNeedsReview } from './lib/workflowGuide'
 import { invalidateChainsCache, listChainsCached } from './lib/chainsCache'
 import { invalidateConclusionTraceCache } from './lib/conclusionTraceCache'
@@ -21,17 +23,30 @@ import { buildReviewStageNav } from './lib/reviewStageNav'
 import './styles.css'
 
 const STEP_TIP: Record<string, string> = {
-  goals: '只选底稿目标和期末。抽样清单在工作台传，不在本页。',
-  sample_desk: '审阅中枢：上传抽样清单、看下一步、切业务笔、一键审阅。',
-  upload_ocr: '上传合同/订单/发票等凭证（抽样清单在工作台传）。',
+  goals: '选择底稿目标并填写项目参数；期间截止日只在这里填写。',
+  sample_upload: '上传或更换抽样清单，校验通过后进入总工作台。',
+  sample_desk: '审阅中枢：查看全部业务状态，并按当前指引进入下一步。',
+  upload_ocr: '上传合同、订单、发票等凭证并运行正式识别。',
   packet_unpack: '看切开是否对，改类型并归到业务笔，确认后再识别。',
   field_confirm: '红灯笔对照原件补缺字段。',
   conclusion_gate5: '测试未通过时，看对不上的数据并确认是不通过还是单据问题。',
-  event_review: '只看需要人工判断的异常、缺件和质量抽检。',
+  event_review: '查看需要人工判断的异常、缺少凭证资料的业务和质量抽检事项。',
   workbook_export: '按目标生成 Excel 审阅底稿。',
   hard_cases: '已处理过的识别难点备忘，供演示讲解。',
   prompts: '只读查看系统提示词，供调试，不参与审阅。',
 }
+
+const WORKFLOW_GUIDE_STEPS = new Set([
+  'goals',
+  'sample_upload',
+  'sample_desk',
+  'upload_ocr',
+  'field_confirm',
+  'evidence_match',
+  'relations_gate4',
+  'conclusion_gate5',
+  'workbook_export',
+])
 
 type JobListItem = {
   job_id: string
@@ -88,6 +103,8 @@ export default function App() {
   const [ocrBusy, setOcrBusy] = useState(false)
   const [postReviewBusy, setPostReviewBusy] = useState(false)
   const [ocrMsg, setOcrMsg] = useState('')
+  const [uploadInitialTab, setUploadInitialTab] = useState<'upload' | 'pending' | 'done'>('upload')
+  const [fieldDirty, setFieldDirty] = useState(false)
   const ocrInflight = useRef(false)
   const [hubVisited, setHubVisited] = useState({ desk: false, conclusion: false })
   const [deskProgress, setDeskProgress] = useState<DeskProgress | null>(null)
@@ -124,7 +141,9 @@ export default function App() {
         )
       })
       .catch(() => {
-        if (!cancelled) setDeskProgress(null)
+        if (!cancelled) {
+          setDeskProgress(null)
+        }
       })
     return () => {
       cancelled = true
@@ -199,8 +218,10 @@ export default function App() {
 
   const switchJob = async (jobId: string) => {
     if (!jobId) return
+    if (fieldDirty && !window.confirm('核对字段页面有未保存修改，确定放弃并切换任务吗？')) return
     try {
       const j = await api.getJob(jobId)
+      setFieldDirty(false)
       setJob(j)
       setStep(j.active_step || 'goals')
       setErr('')
@@ -211,8 +232,10 @@ export default function App() {
   }
 
   const newJob = async () => {
+    if (fieldDirty && !window.confirm('核对字段页面有未保存修改，确定放弃并新建任务吗？')) return
     try {
       const created = await api.createJob(newJobTitle())
+      setFieldDirty(false)
       setJob(created)
       setStep('goals')
       await refreshJobList()
@@ -227,6 +250,15 @@ export default function App() {
   )
 
   const goStep = async (stepId: string) => {
+    if (step === 'field_confirm' && !stepId.startsWith('field_confirm') && fieldDirty) {
+      if (!window.confirm('核对字段页面有未保存修改，确定放弃并离开吗？')) return
+      setFieldDirty(false)
+    }
+    if (stepId.startsWith('upload_ocr:')) {
+      const requestedTab = stepId.split(':')[1]
+      setUploadInitialTab(requestedTab === 'pending' ? 'pending' : requestedTab === 'done' ? 'done' : 'upload')
+      stepId = 'upload_ocr'
+    }
     // 导出门禁/旧配方可能仍抛引擎步名：映射到壳层已有页面，避免「未知步骤」空白
     const STEP_ALIAS: Record<string, string> = {
       three_way_cutoff: 'sample_desk',
@@ -319,15 +351,15 @@ export default function App() {
   }
 
   /** 识别挂在 App 层：后台 OCR + 轮询进度，切菜单不中断 */
-  const runOcrProcess = async (force = false) => {
+  const runOcrProcess = async (force = false, fileNames?: string[]) => {
     if (!job || ocrInflight.current) return
     ocrInflight.current = true
     setOcrBusy(true)
-    setOcrMsg(force ? '提交强制重识别…' : '提交识别任务…')
+    setOcrMsg(force ? '提交重新识别…' : '提交识别任务…')
     setErr('')
     const jobId = job.job_id
     try {
-      let next = await api.process(jobId, { force }).catch(async (e) => {
+      let next = await api.process(jobId, { force, fileNames }).catch(async (e) => {
         const msg = e instanceof Error ? e.message : String(e)
         const jobFromErr = (e as Error & { job?: Job }).job
         if (jobFromErr) onJobUpdate(jobFromErr)
@@ -406,8 +438,18 @@ export default function App() {
           job={job}
           onJob={(j) => {
             onJobUpdate(j)
-            setStep('sample_desk')
+            setStep('sample_upload')
+            void api.setActiveStep(j.job_id, 'sample_upload').catch(() => undefined)
           }}
+        />
+      )
+    }
+    if (step === 'sample_upload') {
+      return (
+        <SampleListUploadPage
+          job={job}
+          onJob={onJobUpdate}
+          onGo={(target) => void goStep(target)}
         />
       )
     }
@@ -456,7 +498,8 @@ export default function App() {
               onJob={onJobUpdate}
               ocrBusy={ocrBusy}
               ocrMsg={ocrMsg}
-              onProcess={(force) => runOcrProcess(force)}
+              initialTab={uploadInitialTab}
+              onProcess={(force, fileNames) => runOcrProcess(force, fileNames)}
               onGo={(s) => void goStep(s)}
             />
           )}
@@ -472,7 +515,8 @@ export default function App() {
             <FieldConfirmPage
               job={job}
               onJob={onJobUpdate}
-              onBackToDesk={() => void goStep('sample_desk')}
+              onDirtyChange={setFieldDirty}
+              onGo={(target) => void goStep(target)}
             />
           )}
           {step === 'workbook_export' && (
@@ -604,6 +648,13 @@ export default function App() {
           </div>
         </aside>
         <main className="main">
+          {job && WORKFLOW_GUIDE_STEPS.has(step) && (
+            <WorkflowStageGuideCard
+              job={job}
+              step={step}
+              onGo={(target) => void goStep(target)}
+            />
+          )}
           {body()}
         </main>
       </div>

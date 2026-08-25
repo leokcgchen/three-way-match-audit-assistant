@@ -50,6 +50,7 @@ def _upload_and_analyze(client: TestClient, job: dict, monkeypatch) -> dict:
         files=[("files", ("客户混装包.pdf", _pdf_bytes(3), "application/pdf"))],
         data={
             "process": "false",
+            "mixed_packet": "true",
             "business_hints": json.dumps({"客户混装包.pdf": ["SO25-0281"]}),
         },
     )

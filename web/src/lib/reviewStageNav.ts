@@ -12,7 +12,7 @@ export type ReviewStageNavItem = {
 
 const ROUTES: Record<string, string> = {
   goals: 'goals',
-  ledger: 'sample_desk',
+  ledger: 'sample_upload',
   upload: 'upload_ocr',
   fields: 'field_confirm',
   gate5: 'conclusion_gate5',
@@ -47,7 +47,7 @@ function markFromJob(job: Job): JourneyMark {
 }
 
 export function buildReviewStageNav(job: Job, currentStep: string): ReviewStageNavItem[] {
-  return journeyProgressPlan(markFromJob(job)).map((item) => {
+  const stages = journeyProgressPlan(markFromJob(job)).map((item) => {
     const step = ROUTES[item.id]
     let state: ReviewStageState
     if (item.blocked) state = 'locked'
@@ -56,4 +56,18 @@ export function buildReviewStageNav(job: Job, currentStep: string): ReviewStageN
     else state = 'available'
     return { id: item.id, step, label: LABELS[item.id] || item.label, state }
   })
+  const ledgerIndex = stages.findIndex((item) => item.id === 'ledger')
+  const goalsSelected = Boolean(job.goal_ids?.length)
+  const hub: ReviewStageNavItem = {
+    id: 'hub',
+    step: 'sample_desk',
+    label: '总工作台',
+    state: !goalsSelected
+      ? 'locked'
+      : currentStep === 'sample_desk'
+        ? 'current'
+        : 'available',
+  }
+  stages.splice(Math.max(0, ledgerIndex + 1), 0, hub)
+  return stages
 }

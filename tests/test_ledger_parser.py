@@ -156,6 +156,112 @@ def test_kjht_fullwidth_colon_not_truncated_to_ht():
     assert "HT25-0282" not in ids
 
 
+def test_sample_business_id_is_the_only_ledger_query_when_present():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {
+                "business_id": "YW-2025-3962",
+                "book_date": "2026-01-02",
+                "book_amount": 113000,
+            }
+        ]
+    )
+    mapping = {
+        "posting_date": "book_date",
+        "biz_id": "business_id",
+        "amount": "book_amount",
+    }
+    index = build_ledger_index(df, mapping)
+    classified = [
+        {
+            "file_name": "YW-2025-3962_发票_FP-260102-8305.pdf",
+            "doc_type": "invoice",
+            "sample_business_id": "YW-2025-3962",
+            "business_index_source": "filename",
+            "fields": {"orderNo": "SO-251209-7214"},
+        }
+    ]
+
+    out = apply_ledger_to_classified(
+        classified,
+        index,
+        order_biz_keys=["SO-251209-7214"],
+    )
+
+    assert out[0]["ledger_match_ok"] is True
+    assert out[0]["ledger_query_biz_id"] == "YW-2025-3962"
+    assert out[0]["ledger_matched_biz_id"] == "YW-2025-3962"
+    assert out[0]["ledger_index_column"] == "business_id"
+    assert out[0]["ledger_match_reason"]["code"] == "MATCHED"
+
+
+def test_ledger_failure_explains_both_index_sides():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [{"business_id": "YW-2025-3962", "book_date": "2026-01-02"}]
+    )
+    index = build_ledger_index(
+        df,
+        {"posting_date": "book_date", "biz_id": "business_id", "amount": None},
+    )
+    classified = [
+        {
+            "file_name": "YW-2025-9999_发票.pdf",
+            "doc_type": "invoice",
+            "sample_business_id": "YW-2025-9999",
+            "business_index_source": "filename",
+            "fields": {"orderNo": "SO-251209-7214"},
+        }
+    ]
+
+    out = apply_ledger_to_classified(classified, index)
+
+    assert out[0]["ledger_match_ok"] is False
+    assert out[0]["ledger_query_biz_id"] == "YW-2025-9999"
+    assert out[0]["ledger_index_column"] == "business_id"
+    assert out[0]["ledger_match_reason"] == {
+        "code": "NOT_FOUND",
+        "message": "序时账业务主键列中未找到与凭证业务编号相同的值。",
+        "document_index": "YW-2025-9999",
+        "document_index_source": "filename",
+        "ledger_index_column": "business_id",
+        "query_value": "YW-2025-9999",
+    }
+
+
+def test_pipeline_ledger_wrapper_resolves_sample_identity_before_lookup():
+    from src.workflow.pipeline import apply_ledger_to_classified_list
+
+    classified = [
+        {
+            "file_name": "YW-2025-3962_签收验收单_YS-260102-005.pdf",
+            "doc_type": "receipt",
+            "fields": {"documentNo": "YS-260102-005", "orderNo": "SO-251209-7214"},
+        }
+    ]
+    rows = [
+        {
+            "business_id": "YW-2025-3962",
+            "book_date": "2026-01-02",
+            "book_amount": 113000,
+        }
+    ]
+
+    out = apply_ledger_to_classified_list(
+        classified,
+        rows,
+        {"posting_date": "book_date", "biz_id": "business_id", "amount": "book_amount"},
+        sample_population={"business_ids": ["YW-2025-3962"]},
+    )
+
+    assert out[0]["sample_business_id"] == "YW-2025-3962"
+    assert out[0]["business_index_source"] == "filename"
+    assert out[0]["ledger_match_ok"] is True
+
+
 if __name__ == "__main__":
     test_suggest_column_mapping_sap()
     test_build_index_and_lookup()

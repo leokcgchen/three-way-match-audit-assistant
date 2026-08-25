@@ -62,11 +62,16 @@ function pendingNeedProcess(job: Job): boolean {
 }
 
 export function packetNeedsReview(job: Job): boolean {
+  const hasDeclaredPacket = (job.pending_files || []).some(
+    (p) => !p.from_packet && p.mixed_packet_declared === true,
+  )
+  if (!hasDeclaredPacket) return false
   const st = String(job.packet_run?.status || '')
   if (st === 'needs_review' || st === 'pending_analyze' || st === 'analyzing') return true
   return (job.pending_files || []).some(
     (p) =>
       !p.from_packet &&
+      p.mixed_packet_declared === true &&
       (p.packet_kind === 'packet_single_chain' || p.packet_kind === 'packet_multi_chain'),
   )
 }

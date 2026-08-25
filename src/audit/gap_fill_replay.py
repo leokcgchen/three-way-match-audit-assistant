@@ -18,11 +18,18 @@ from src.models.advisory_candidates import (
 from src.models.field_values import set_candidate
 from src.workflow.chain_workspace import (
     docs_for_chain,
+    get_sample,
     is_gospd_mode,
     resolve_active_chain_id,
 )
 from src.workflow.job_store import JOB_STORE
-from src.workflow.pipeline import run_amount, run_contract, run_evidence, run_three_way
+from src.workflow.pipeline import (
+    cutoff_calendar_mode,
+    run_amount,
+    run_contract,
+    run_evidence,
+    run_three_way,
+)
 from src.workflow.three_way_persist import three_way_sample_patch
 
 
@@ -173,7 +180,20 @@ def _replay_dirty(
     if expanded & {"cutoff", "three_way"}:
         if can_tests and ("three_way_cutoff" in plan or not plan):
             try:
-                tw = run_three_way(docs)
+                active_sample = get_sample(job, chain_id) if chain_id else {}
+                three_way_kwargs: Dict[str, Any] = {
+                    "period_end": job.get("period_end"),
+                    "calendar_mode": cutoff_calendar_mode(
+                        list((job.get("plan") or {}).get("goal_ids") or job.get("goal_ids") or []),
+                        job.get("calendar_mode"),
+                    ),
+                    "fiscal_year_start": job.get("fiscal_year_start"),
+                }
+                if chain_id and chain_id != "未识别业务号":
+                    three_way_kwargs["business_group_id"] = chain_id
+                    if active_sample.get("complete_set"):
+                        three_way_kwargs["complete_set"] = True
+                tw = run_three_way(docs, **three_way_kwargs)
                 test_patch.update(three_way_sample_patch(tw))
                 replayed.append("three_way")
             except Exception as exc:  # noqa: BLE001

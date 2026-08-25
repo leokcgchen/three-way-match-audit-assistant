@@ -1,0 +1,92 @@
+{
+  "chain_id": "YW-2025-3962",
+  "job": {
+    "period_end": "2025-12-31",
+    "classified": [
+      {
+        "file_name": "YW-2025-3962_销售订单_SO-251209-7214.pdf",
+        "doc_type": "order",
+        "raw_text": "订单号 SO-251209-7214\n订单编号 SO-251209-7214\n单据日期 2025-12-09\n卖方 华东智造设备有限公司\n卖方地址 上海市浦东新区张江路88号\n买方 宁波海岳机电有限公司\n买方地址 宁波市鄞州区学士路98号\n客户编码 KH-330212-0142\n货物 伺服电机\n规格型号 SM-130\n数量 20 台\n价税合计 113000",
+        "fields": {
+          "orderNo": "SO-251209-7214",
+          "documentNo": "SO-251209-7214",
+          "documentDate": "2025-12-09",
+          "sellerName": "华东智造设备有限公司",
+          "sellerAddress": "上海市浦东新区张江路88号",
+          "buyerName": "宁波海岳机电有限公司",
+          "buyerAddress": "宁波市鄞州区学士路98号",
+          "customerCode": "KH-330212-0142",
+          "goodsName": "伺服电机",
+          "model": "SM-130",
+          "quantity": 20,
+          "unit": "台",
+          "totalAmount": 113000,
+          "items": [
+            {"lineNo": "SM-130", "goodsName": "伺服电机", "model": "SM-130", "quantity": 20, "unit": "台", "totalAmount": 113000}
+          ]
+        }
+      },
+      {
+        "file_name": "YW-2025-3962_签收验收单_YS-260102-005.pdf",
+        "doc_type": "receipt",
+        "raw_text": "关联订单号 SO-251209-7214\n验收单号 YS-260102-005\n验收日期 2026-01-02T09:40\n卖方 华东智造设备有限公司\n卖方地址 上海市浦东新区张江路88号\n买方 宁波海岳机电有限公司\n买方地址 宁波市鄞州区学士路98号\n客户编码 KH-NB-0062\n货物 伺服电机\n规格型号 SM-130\n实收数量 20 台\n价税合计 113000",
+        "fields": {
+          "orderNo": "SO-251209-7214",
+          "documentNo": "YS-260102-005",
+          "acceptanceDate": "2026-01-02T09:40",
+          "sellerName": "华东智造设备有限公司",
+          "sellerAddress": "上海市浦东新区张江路88号",
+          "buyerName": "宁波海岳机电有限公司",
+          "buyerAddress": "宁波市鄞州区学士路98号",
+          "customerCode": "KH-NB-0062",
+          "goodsName": "伺服电机",
+          "model": "SM-130",
+          "quantity": 20,
+          "unit": "台",
+          "totalAmount": 113000,
+          "items": [
+            {"lineNo": "SM-130", "goodsName": "伺服电机", "model": "SM-130", "quantity": 20, "unit": "台", "totalAmount": 113000}
+          ]
+        }
+      },
+      {
+        "file_name": "YW-2025-3962_发票_FP-260102-8305.pdf",
+        "doc_type": "invoice",
+        "raw_text": "关联订单号 SO-251209-7214\n发票号码 FP-260102-8305\n开票日期 2026-01-02T14:50\n卖方 华东智造设备有限公司\n卖方地址 上海市浦东新区张江路88号\n买方 宁波海岳机电有限公司\n买方地址 宁波市鄞州区学士路98号\n货物 伺服电机\n规格型号 SM-130\n数量 20 台\n不含税金额 100000\n税额 13000\n价税合计 113000",
+        "fields": {
+          "orderNo": "SO-251209-7214",
+          "invoiceNo": "FP-260102-8305",
+          "documentDate": "2026-01-02T14:50",
+          "sellerName": "华东智造设备有限公司",
+          "sellerAddress": "上海市浦东新区张江路88号",
+          "buyerName": "宁波海岳机电有限公司",
+          "buyerAddress": "宁波市鄞州区学士路98号",
+          "goodsName": "伺服电机",
+          "model": "SM-130",
+          "quantity": 20,
+          "unit": "台",
+          "totalAmount": 113000,
+          "items": [
+            {"lineNo": "SM-130", "goodsName": "伺服电机", "model": "SM-130", "quantity": 20, "unit": "台", "unitPrice": 5000, "netAmount": 100000, "taxAmount": 13000}
+          ]
+        }
+      }
+    ],
+    "gospd_sample_results": {
+      "YW-2025-3962": {
+        "cutoff_test": {
+          "test_status": "PASS",
+          "reason": "控制权于2026-01-02 09:40转移，发票于当日14:50开具，先验收后开票。"
+        }
+      }
+    }
+  },
+  "expected": {
+    "overall_status": "PASS_WITH_WARNING",
+    "three_way_status": "PASS_WITH_WARNING",
+    "cutoff_status": "PASS",
+    "issue_codes": ["CUSTOMER_CODE_MAPPING_REQUIRED"],
+    "amount_calculation": "20 × 5000 + 13000 = 113000",
+    "chronology_values": ["2025-12-09", "2026-01-02T09:40", "2026-01-02T14:50"]
+  }
+}

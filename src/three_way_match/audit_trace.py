@@ -8,10 +8,17 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 
-_ROLE_LABELS = {"order": "订单/合同", "receipt": "签收/验收", "delivery": "发货", "invoice": "发票"}
+_ROLE_LABELS = {
+    "contract": "合同",
+    "order": "订单",
+    "receipt": "签收/验收",
+    "delivery": "发货",
+    "invoice": "发票",
+}
 _BUSINESS_KEY_RE = re.compile(r"\b(?:SO|HT|PO)[-_]?\d{2,4}[-_]?\d{3,6}\b", re.I)
 
 
@@ -37,13 +44,59 @@ def _document_business_keys(document: dict[str, Any]) -> list[str]:
     return sorted({match.upper().replace("_", "-") for match in _BUSINESS_KEY_RE.findall(raw)})
 
 
-def _business_group_key(key: str) -> str:
-    """SO/HT/PO 前缀不同但编号主体相同，通常是同一业务的不同单据编号口径。"""
-    return re.sub(r"^(?:SO|HT|PO)-?", "", str(key).upper())
+def _date_value(raw: Any) -> date | None:
+    text = str(raw or "").strip()[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def build_date_chronology(classified: list[dict[str, Any]]) -> dict[str, Any]:
+    """合同→订单→签收/验收→发票的独立时序判断。"""
+    by_type: dict[str, dict[str, Any]] = {}
+    for item in classified:
+        role = str(item.get("doc_type") or "").lower()
+        if role and role not in by_type:
+            by_type[role] = item
+    receipt = by_type.get("receipt") or by_type.get("delivery") or {}
+    raw = [
+        ("合同日", (by_type.get("contract") or {}).get("fields", {}).get("documentDate")),
+        ("订单日", (by_type.get("order") or {}).get("fields", {}).get("documentDate")),
+        ("签收/验收日", (receipt.get("fields") or {}).get("acceptanceDate") or (receipt.get("fields") or {}).get("documentDate")),
+        ("发票日", (by_type.get("invoice") or {}).get("fields", {}).get("documentDate")),
+    ]
+    parsed = [(label, _date_value(value), value) for label, value in raw]
+    inversions = [
+        f"{parsed[i - 1][0]} {parsed[i - 1][1]} 晚于 {label} {value}"
+        for i, (label, value, _raw) in enumerate(parsed)
+        if i > 0 and value is not None and parsed[i - 1][1] is not None and value < parsed[i - 1][1]
+    ]
+    missing = [label for label, value, _raw in parsed if value is None]
+    if inversions:
+        status = "FAIL"
+        summary = "时序异常：" + "；".join(inversions)
+    elif missing:
+        status = "REVIEW"
+        summary = "时序待复核：缺少或无法识别" + "、".join(missing)
+    else:
+        status = "PASS"
+        summary = "时序通过：合同日≤订单日≤签收/验收日≤发票日"
+    return {
+        "status": status,
+        "summary": summary,
+        "rule": "合同日≤订单日≤签收/验收日≤发票日；先检查所有有效相邻对，倒序优先于缺失。",
+        "dates": [{"label": label, "value": str(value or "")} for label, value, _raw in parsed],
+        "inversions": inversions,
+        "missing": missing,
+    }
 
 
 def build_three_way_audit_view(
-    classified: list[dict[str, Any]], result: dict[str, Any] | None = None
+    classified: list[dict[str, Any]],
+    result: dict[str, Any] | None = None,
+    *,
+    business_binding_confirmed: bool = False,
 ) -> dict[str, Any]:
     """构造单据捆绑、字段一致性和规则轨迹三个独立视图。"""
     result = result or {}
@@ -54,19 +107,31 @@ def build_three_way_audit_view(
         if role in roles:
             roles[role].append(item)
 
-    required = ("order", "invoice")
-    missing: list[str] = [role for role in required if not roles[role]]
+    contract_anchor_confirmed = (
+        str(result.get("anchor_source") or "").upper()
+        == "CONTRACT_AS_ORDER_ANCHOR"
+    )
+    anchor_role = (
+        "order" if roles["order"]
+        else "contract" if roles["contract"] and contract_anchor_confirmed
+        else None
+    )
+    missing: list[str] = []
+    if not anchor_role:
+        missing.append("order_or_contract")
+    if not roles["invoice"]:
+        missing.append("invoice")
     if not roles["receipt"] and not roles["delivery"]:
         missing.append("receipt_or_delivery")
 
     documents: list[dict[str, Any]] = []
     business_keys: set[str] = set()
-    business_groups: set[str] = set()
+    document_key_sets: list[set[str]] = []
     for role, docs in roles.items():
         for doc in docs:
             keys = _document_business_keys(doc)
             business_keys.update(keys)
-            business_groups.update(_business_group_key(key) for key in keys)
+            document_key_sets.append(set(keys))
             documents.append(
                 {
                     "role": role,
@@ -76,25 +141,41 @@ def build_three_way_audit_view(
                 }
             )
 
+    shared_business_keys = (
+        set.intersection(*document_key_sets)
+        if document_key_sets and all(document_key_sets)
+        else set()
+    )
+
     if missing:
         binding_status = "FAIL"
         binding_code = "REQUIRED_DOCUMENT_MISSING"
         binding_reason = "缺少必要单据：" + "、".join(
-            "签收/验收或发货" if item == "receipt_or_delivery" else _ROLE_LABELS[item]
+            "签收/验收或发货" if item == "receipt_or_delivery"
+            else "订单或合格合同" if item == "order_or_contract"
+            else _ROLE_LABELS[item]
             for item in missing
         )
-    elif len(business_groups) > 1:
-        binding_status = "FAIL"
-        binding_code = "BUSINESS_KEY_CONFLICT"
-        binding_reason = "单据业务编号不唯一，不能确认属于同一笔业务：" + "、".join(sorted(business_keys))
-    elif not business_keys:
+    elif any(not keys for keys in document_key_sets):
         binding_status = "FAIL"
         binding_code = "BUSINESS_KEY_UNRESOLVED"
-        binding_reason = "未提取到可交叉验证的业务编号，不能确认三份单据属于同一笔业务"
+        binding_reason = "至少一份单据未提取到可交叉验证的业务编号，不能自动确认属于同一笔业务"
+    elif not shared_business_keys and business_binding_confirmed:
+        binding_status = "PASS"
+        binding_code = "DOCUMENT_GROUP_HUMAN_CONFIRMED"
+        binding_reason = "审计师已确认该组单据属于同一抽样业务；字段一致性仍由后续硬规则独立检验"
+    elif not shared_business_keys:
+        binding_status = "FAIL"
+        binding_code = "BUSINESS_REFERENCE_UNCONFIRMED"
+        binding_reason = (
+            "各单据未出现完全相同的业务引用，不能自动确认属于同一笔业务；"
+            "SO/HT/PO 编号仅数字尾号相同只能作为线索，须人工确认："
+            + "、".join(sorted(business_keys))
+        )
     else:
         binding_status = "PASS"
         binding_code = "DOCUMENT_GROUP_CONFIRMED"
-        binding_reason = "单据角色齐全，且业务编号一致：" + "、".join(sorted(business_keys))
+        binding_reason = "单据角色齐全，且存在跨单据完全相同的业务引用：" + "、".join(sorted(shared_business_keys))
 
     match_result = dict(result.get("match_result") or {})
     comparisons = list(match_result.get("comparisons") or [])
@@ -133,10 +214,10 @@ def build_three_way_audit_view(
     decision_reasons = list(match_result.get("decision_reasons") or [])
     if binding_status == "FAIL":
         decision = "HOLD_REVIEW"
-        if binding_code == "BUSINESS_KEY_CONFLICT":
-            hold_reason = "AMBIGUOUS_BINDING"
-        else:
+        if binding_code == "REQUIRED_DOCUMENT_MISSING":
             hold_reason = "DOCUMENT_MISSING"
+        else:
+            hold_reason = "AMBIGUOUS_BINDING"
         decision_reasons = [f"D2:{binding_code} {binding_reason}"] + decision_reasons
     elif field_status == "FAIL":
         decision = match_decision if match_decision in {
@@ -167,13 +248,22 @@ def build_three_way_audit_view(
     cutoff_status = _status(cutoff_result.get("测试状态"), "NOT_TESTED")
     if not result.get("cutoff_available", False) and cutoff_status == "NOT_TESTED":
         cutoff_status = "SKIPPED"
+    chronology = build_date_chronology(active)
 
     trace = [
+        {
+            "stage": "DATE_CHRONOLOGY",
+            "title": "独立测试：单据时序",
+            "status": chronology["status"],
+            "rule": chronology["rule"],
+            "evidence": chronology["dates"],
+            "outcome": chronology["summary"],
+        },
         {
             "stage": "DOCUMENT_BINDING",
             "title": "第一步：单据捆绑",
             "status": binding_status,
-            "rule": "订单/合同、签收/验收或发货、发票齐备；并以业务编号确认属于同一笔业务。",
+            "rule": "订单/合同、签收/验收或发货、发票齐备；至少存在一个跨单据完全相同的业务引用。不同前缀仅数字尾号相同不自动放行。",
             "evidence": documents,
             "outcome": binding_reason,
         },
@@ -201,7 +291,9 @@ def build_three_way_audit_view(
             "reason": binding_reason,
             "documents": documents,
             "business_keys": sorted(business_keys),
+            "shared_business_keys": sorted(shared_business_keys),
             "missing_roles": missing,
+            "anchor_role": anchor_role,
         },
         "field_consistency": {
             "status": field_status,
@@ -213,6 +305,7 @@ def build_three_way_audit_view(
         "three_way_status": three_way_status,
         "three_way_failure_category": failure_category,
         "cutoff_status": cutoff_status,
+        "date_chronology": chronology,
         "decision": decision,
         "decision_reasons": decision_reasons,
         "hold_reason_code": hold_reason,

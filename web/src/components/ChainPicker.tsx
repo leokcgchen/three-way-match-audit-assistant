@@ -137,7 +137,7 @@ export function ChainPicker({ job, onJob, compact = false }: Props) {
       </div>
       {err && <p className="err">{err}</p>}
       {!chains.length ? (
-        <p className="preview-empty mt-8">还没有样本笔。请回工作台上传抽样清单，再传凭证。</p>
+        <p className="preview-empty mt-8">还没有样本笔。请先到“上传抽样清单”页面导入清单，再上传凭证。</p>
       ) : (
         <select
           className="field-select mt-8"

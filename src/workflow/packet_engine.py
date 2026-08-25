@@ -62,18 +62,17 @@ def detect_packet_kind(
     file_name: str,
     path: str,
     *,
+    mixed_packet_declared: bool = False,
     light_confident: bool = False,
     doc_type: str = "",
     page_count: int | None = None,
     page_biz_ids: list[str] | None = None,
 ) -> str:
-    """规则判定，不调大模型。"""
+    """只对审计师明确声明的混装 PDF 开启拆包，不做自动推断。"""
     suffix = Path(file_name).suffix.lower()
     ids = extract_biz_ids_from_filename(file_name)
     n = page_count if page_count is not None else pdf_page_count(path)
-    if suffix != ".pdf":
-        return STANDARD
-    if n <= 1:
+    if not mixed_packet_declared or suffix != ".pdf" or n <= 1:
         return STANDARD
     distinct_so = []
     for bid in page_biz_ids or []:
@@ -110,6 +109,8 @@ def pending_raw_packets(job: dict[str, Any] | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in (job or {}).get("pending_files") or []:
         if item.get("from_packet"):
+            continue
+        if item.get("mixed_packet_declared") is not True:
             continue
         kind = str(item.get("packet_kind") or "")
         if kind in {PACKET_SINGLE, PACKET_MULTI}:
@@ -148,6 +149,7 @@ def annotate_pending_kinds(pending: list[dict[str, Any]]) -> list[dict[str, Any]
         row["packet_kind"] = detect_packet_kind(
             name,
             path,
+            mixed_packet_declared=row.get("mixed_packet_declared") is True,
             light_confident=bool(row.get("light_confident")),
             doc_type=str(row.get("doc_type") or ""),
             page_count=n,

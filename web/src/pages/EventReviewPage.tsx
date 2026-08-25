@@ -140,7 +140,7 @@ export function EventReviewPage({ job, onJob, onGo }: Props) {
       <div className="event-review-page">
         <EventDecisionCard event={event} jobId={job.job_id} />
         <div className="event-review-gate">
-          <p>缺件不能用人工按钮直接放行，请回到对应业务行补充资料。</p>
+            <p>缺少凭证资料时不能通过人工按钮直接放行，请回到对应业务行补充资料。</p>
           <button type="button" className="btn primary" onClick={() => onGo('sample_desk')}>补充资料</button>
         </div>
       </div>

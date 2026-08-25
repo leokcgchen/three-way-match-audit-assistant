@@ -1,6 +1,7 @@
 import type {
   CoverageMap,
   Job,
+  FieldResolution,
   PromptCatalog,
   ReviewDecisionRequest,
   ReviewEventsResponse,
@@ -119,6 +120,8 @@ export type AmountAmbiguity = {
 
 export type ChainInfo = {
   chain_id: string
+  display_index?: string
+  order_numbers?: string[]
   doc_count: number
   doc_types?: string[]
   file_names?: string[]
@@ -127,6 +130,7 @@ export type ChainInfo = {
   has_amount?: boolean
   has_three_way?: boolean
   matching_confirmed?: boolean
+  complete_set?: boolean
   is_active?: boolean
   /** null=未导入抽样清单；true/false=是否在清单内 */
   in_sample_population?: boolean | null
@@ -362,8 +366,14 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ chain_id }),
     }),
-  seedDemo: (jobId: string) =>
-    req<Job>(`/api/v1/workflow/jobs/${jobId}/seed-demo`, { method: 'POST' }),
+  setChainCompleteSet: (jobId: string, chainId: string, completeSet: boolean) =>
+    req<Job>(
+      `/api/v1/workflow/jobs/${jobId}/chains/${encodeURIComponent(chainId)}/complete-set`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ complete_set: completeSet }),
+      },
+    ),
   upload: async (
     jobId: string,
     files: File[],
@@ -371,6 +381,7 @@ export const api = {
       force?: boolean
       process?: boolean
       businessHints?: Record<string, string[]>
+      mixedPacket?: boolean
     },
   ) => {
     const fd = new FormData()
@@ -380,11 +391,20 @@ export const api = {
     if (opts?.businessHints) {
       fd.append('business_hints', JSON.stringify(opts.businessHints))
     }
+    if (opts?.mixedPacket) fd.append('mixed_packet', 'true')
     return req<Job>(`/api/v1/workflow/jobs/${jobId}/upload`, { method: 'POST', body: fd })
   },
-  process: (jobId: string, opts?: { force?: boolean }) => {
+  deleteScopeException: (jobId: string, exceptionId: string) =>
+    req<Job>(
+      `/api/v1/workflow/jobs/${jobId}/scope-exceptions/${encodeURIComponent(exceptionId)}`,
+      { method: 'DELETE' },
+    ),
+  process: (jobId: string, opts?: { force?: boolean; fileNames?: string[] }) => {
     const q = opts?.force ? '?force=true' : ''
-    return req<Job>(`/api/v1/workflow/jobs/${jobId}/process${q}`, { method: 'POST' })
+    return req<Job>(`/api/v1/workflow/jobs/${jobId}/process${q}`, {
+      method: 'POST',
+      body: JSON.stringify({ file_names: opts?.fileNames || [] }),
+    })
   },
   fieldCatalog: () => req<import('./types').FieldCatalog>('/api/v1/workflow/field-catalog'),
   putFieldPlan: (
@@ -413,6 +433,11 @@ export const api = {
     req<Job>(`/api/v1/workflow/jobs/${jobId}/packet/analyze`, {
       method: 'POST',
       body: JSON.stringify(body || {}),
+    }),
+  declareMixed: (jobId: string, file_name: string) =>
+    req<Job>(`/api/v1/workflow/jobs/${jobId}/documents/declare-mixed`, {
+      method: 'POST',
+      body: JSON.stringify({ file_name }),
     }),
   packetConfirm: (
     jobId: string,
@@ -513,6 +538,8 @@ export const api = {
       file_name: string
       fields: Record<string, unknown>
       doc_type?: string
+      custom_doc_type_name?: string
+      doc_type_confirmed?: boolean
       reason?: string
     },
   ) =>
@@ -525,8 +552,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ file_name, doc_type }),
     }),
-  confirmFields: (jobId: string) =>
-    req<Job>(`/api/v1/workflow/jobs/${jobId}/hitl/fields/confirm`, { method: 'POST' }),
+  confirmFields: (jobId: string, chainId: string) =>
+    req<Job>(`/api/v1/workflow/jobs/${jobId}/hitl/fields/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ chain_id: chainId }),
+    }),
   confirmChainLinkage: (
     jobId: string,
     opts?: { auto_evidence?: boolean; auto_accept_relations?: boolean },
@@ -707,6 +737,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  refreshFieldResolution: (jobId: string, chainId: string, force = false) =>
+    req<FieldResolution>(`/api/v1/workflow/jobs/${jobId}/field-resolution/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ chain_id: chainId, force }),
+    }),
+  decideFieldResolutionEdge: (
+    jobId: string,
+    edgeId: string,
+    body: { chain_id: string; decision: 'CONFIRMED' | 'REJECTED'; reason: string },
+  ) =>
+    req<FieldResolution>(
+      `/api/v1/workflow/jobs/${jobId}/field-resolution/edges/${encodeURIComponent(edgeId)}/decision`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   previewWorkbookRows: (jobId: string) =>
     req<import('./types').WorkbookRowsPreview>(
       `/api/v1/workflow/jobs/${jobId}/workbook-rows/preview`,

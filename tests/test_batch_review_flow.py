@@ -12,6 +12,40 @@ from src.workflow.job_store import JOB_STORE
 from src.workflow.signatures import fields_signature
 
 
+def test_finish_after_classify_persists_automatic_review_report(monkeypatch) -> None:
+    from src.workflow.sample_desk import finish_after_classify
+
+    job = JOB_STORE.create(title="auto-review-report")
+    job_id = job["job_id"]
+    JOB_STORE.update(
+        job_id,
+        goal_ids=["gospd01030"],
+        plan={"goal_ids": ["gospd01030"], "required_steps": ["three_way_cutoff"]},
+        classified=[],
+    )
+
+    def fake_batch_review(current_job_id, *, force_rerun=False):
+        assert current_job_id == job_id
+        assert force_rerun is False
+        return {
+            "summary": "已处理 1 笔；跳过 1 笔；失败 0 笔",
+            "ran": [{"chain_id": "YW-1", "actions": ["三单+截止"]}],
+            "skipped": [{"chain_id": "YW-2", "reason": "字段未确认"}],
+            "failed": [],
+            "need_gate4": [],
+        }
+
+    monkeypatch.setattr("src.workflow.batch_review.run_batch_review", fake_batch_review)
+
+    finish_after_classify(job_id)
+
+    report = (JOB_STORE.get(job_id) or {})["auto_review_last_run"]
+    assert report["status"] == "COMPLETED"
+    assert report["summary"] == "已处理 1 笔；跳过 1 笔；失败 0 笔"
+    assert report["ran"][0]["chain_id"] == "YW-1"
+    assert report["skipped"][0]["reason"] == "字段未确认"
+
+
 def test_field_confirm_digests_field_gap_fill():
     job = JOB_STORE.create(title="digest-adv")
     jid = job["job_id"]
@@ -155,6 +189,10 @@ def test_batch_review_auto_confirms_complete_fields_then_runs():
         {
             "file_name": f"{order_no}_order.pdf",
             "doc_type": "order",
+            "raw_text": (
+                f"销售订单\n订单编号 {order_no}\n合同号 HT-1\n买方 甲公司\n"
+                "数量 1\n价税合计 113"
+            ),
             "fields": {
                 "orderNo": order_no,
                 "contractNo": "HT-1",
@@ -166,11 +204,16 @@ def test_batch_review_auto_confirms_complete_fields_then_runs():
         {
             "file_name": f"{order_no}_receipt.pdf",
             "doc_type": "receipt",
+            "raw_text": f"签收验收单\n关联订单号 {order_no}\n验收日期 2025-12-30\n实收数量 1",
             "fields": {"orderNo": order_no, "acceptanceDate": "2025-12-30", "quantity": "1"},
         },
         {
             "file_name": f"{order_no}.pdf",
             "doc_type": "invoice",
+            "raw_text": (
+                f"增值税专用发票\n订单号 {order_no}\n发票号码 INV-1\n买方 甲公司\n"
+                "价税合计 113\n不含税金额 100\n税额 13\n数量 1\n开票日期 2025-12-28"
+            ),
             "fields": {
                 "orderNo": order_no,
                 "invoiceNo": "INV-1",

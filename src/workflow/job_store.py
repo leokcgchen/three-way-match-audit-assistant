@@ -70,6 +70,8 @@ def _empty_job(job_id: str, title: str = "") -> dict[str, Any]:
         "plan": plan,
         "classified": [],
         "pending_files": [],
+        # 抽样边界异常：保留文件供审计师查看，绝不自动扩充样本业务。
+        "scope_exceptions": [],
         "fields_confirmed": False,
         "fields_confirm_sig": None,
         "evidence": None,
@@ -95,8 +97,12 @@ def _empty_job(job_id: str, title: str = "") -> dict[str, Any]:
         "workbook_paths": [],
         "ocr_issues": [],
         "ocr_processing": False,
+        "ocr_has_run": False,
+        "ocr_last_run_at": None,
         "ocr_processing_message": None,
         "ocr_progress": None,
+        "auto_review_processing": False,
+        "auto_review_last_run": None,
         # OCR 前字段清单（系统必用 + 按类型/全局自选）
         "field_plan": None,
         # Gate5 底稿行结论覆写：{ format: { chain_id: { all_ok, exception, ... } } }
@@ -285,6 +291,87 @@ class JobStore:
                 job["updated_at"] = _utc_now()
             self._persist(job)
             return copy.deepcopy(job)
+
+    def set_field_resolution(
+        self, job_id: str, *, chain_id: str, resolution: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist a versioned resolution inside its sample without moving the UI cursor."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            samples = merge_sample(
+                job.get("gospd_sample_results") or {},
+                chain_id=chain_id,
+                patch={"field_resolution": copy.deepcopy(resolution)},
+            )
+            job["gospd_sample_results"] = samples
+            job["updated_at"] = _utc_now()
+            self._persist(job)
+            return copy.deepcopy(job)
+
+    def decide_field_resolution_edge(
+        self,
+        job_id: str,
+        *,
+        chain_id: str,
+        edge_id: str,
+        decision: str,
+        reason: str,
+        actor: str = "auditor",
+    ) -> dict[str, Any]:
+        """Record a human edge decision while preserving raw evidence and prior status."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            sample = get_sample(job, chain_id)
+            resolution = copy.deepcopy(sample.get("field_resolution") or {})
+            edges = list(resolution.get("edges") or [])
+            target = next((edge for edge in edges if str(edge.get("edge_id") or "") == edge_id), None)
+            if target is None:
+                raise KeyError(edge_id)
+            before = {
+                "status": target.get("status"),
+                "decision_owner": target.get("decision_owner"),
+            }
+            target["prior_status"] = target.get("status")
+            target["status"] = decision
+            target["decision_owner"] = "human"
+            target["human_reason"] = reason
+            target["human_actor"] = actor
+            target["human_decided_at"] = _utc_now()
+            resolution["edges"] = edges
+            audit = list(resolution.get("audit_log") or [])
+            audit.append(
+                {
+                    "action": "FIELD_RESOLUTION_EDGE_DECISION",
+                    "edge_id": edge_id,
+                    "actor": actor,
+                    "reason": reason,
+                    "before": before,
+                    "after": {"status": decision, "decision_owner": "human"},
+                    "at": _utc_now(),
+                }
+            )
+            resolution["audit_log"] = audit
+            for issue in list(resolution.get("issues") or []):
+                if isinstance(issue, dict) and str(issue.get("edge_id") or "") == edge_id:
+                    issue["resolution_status"] = decision
+            plan = resolution.get("comparison_plan") if isinstance(resolution.get("comparison_plan"), dict) else {}
+            domains = plan.get("domains") if isinstance(plan.get("domains"), dict) else {}
+            for issue in list(domains.get("issues") or []):
+                if isinstance(issue, dict) and str(issue.get("edge_id") or "") == edge_id:
+                    issue["resolution_status"] = decision
+            samples = merge_sample(
+                job.get("gospd_sample_results") or {},
+                chain_id=chain_id,
+                patch={"field_resolution": resolution},
+            )
+            job["gospd_sample_results"] = samples
+            job["updated_at"] = _utc_now()
+            self._persist(job)
+            return copy.deepcopy(resolution)
 
     def set_goals(self, job_id: str, goal_ids: list[str]) -> dict[str, Any]:
         """写入底稿目标；出计划步骤的测试结果与 Gate5/导出缓存清掉，避免串稿。"""
@@ -603,6 +690,8 @@ class JobStore:
         file_name: str,
         fields: dict[str, Any],
         doc_type: Optional[str] = None,
+        custom_doc_type_name: Optional[str] = None,
+        doc_type_confirmed: Optional[bool] = None,
     ) -> dict[str, Any]:
         from src.workflow.chain_workspace import chain_ids_touching_files
 
@@ -619,6 +708,38 @@ class JobStore:
                     item["fields"] = dict(fields)
                     if doc_type:
                         item["doc_type"] = doc_type
+                    effective_type = str(item.get("doc_type") or "other")
+                    if effective_type == "other":
+                        custom_name = (
+                            str(custom_doc_type_name).strip()
+                            if custom_doc_type_name is not None
+                            else str(item.get("custom_doc_type_name") or "").strip()
+                        )
+                        confirmed = (
+                            bool(doc_type_confirmed)
+                            if doc_type_confirmed is not None
+                            else bool(item.get("doc_type_confirmed"))
+                        )
+                        if confirmed and not custom_name:
+                            raise ValueError("请填写当前文件的具体单据名称")
+                        if len(custom_name) > 80:
+                            raise ValueError("当前文件具体名称不能超过 80 个字符")
+                        if custom_name:
+                            item["custom_doc_type_name"] = custom_name
+                        else:
+                            item.pop("custom_doc_type_name", None)
+                        item["doc_type_confirmed"] = confirmed
+                        item["type_uncertain"] = not confirmed
+                    else:
+                        item.pop("custom_doc_type_name", None)
+                        item["doc_type_confirmed"] = (
+                            bool(doc_type_confirmed)
+                            if doc_type_confirmed is not None
+                            else True
+                        )
+                        item["type_uncertain"] = False
+                    if item.get("doc_type_confirmed"):
+                        item["doc_type_source"] = "human"
                     item["manual_edited"] = True
                     seed_field_meta(item, fields=fields, source="manual_patch")
                     for k, v in (fields or {}).items():
@@ -661,7 +782,7 @@ class JobStore:
             self._persist(job)
             return copy.deepcopy(job)
 
-    def confirm_fields(self, job_id: str) -> dict[str, Any]:
+    def confirm_fields(self, job_id: str, *, chain_id: Optional[str] = None) -> dict[str, Any]:
         from src.models.field_values import accept_all_current_fields
         from src.workflow.amount_ambiguity import list_open_ambiguities
 
@@ -674,7 +795,15 @@ class JobStore:
                 raise ValueError("尚无单据可确认")
             # GOSPD：只确认当前笔单据，签名也按当前笔，避免改另一笔打回本笔
             if is_gospd_mode(job):
-                active = resolve_active_chain_id(job) or ""
+                requested_chain = str(chain_id or "").strip()
+                active_before = resolve_active_chain_id(job) or ""
+                chain_ids = {
+                    str(row.get("chain_id") or "")
+                    for row in list_business_chains(classified)
+                }
+                if requested_chain and requested_chain not in chain_ids:
+                    raise ValueError(f"当前任务不存在业务笔：{requested_chain}")
+                active = requested_chain or resolve_active_chain_id(job) or ""
                 if not active:
                     raise ValueError("请先选择业务笔再确认字段")
                 open_amb = list_open_ambiguities(job, chain_id=active)
@@ -702,8 +831,15 @@ class JobStore:
                 sig = fields_signature(
                     [d for d in classified if str(d.get("file_name") or "") in touch]
                 )
-                job["fields_confirmed"] = True
-                job["fields_confirm_sig"] = sig
+                if requested_chain and active_before and active_before != active:
+                    # Explicit confirmation from another tab must not overwrite
+                    # the top-level mirror for the job-wide active cursor.
+                    active_sample = get_sample(job, active_before)
+                    job["fields_confirmed"] = bool(active_sample.get("fields_confirmed"))
+                    job["fields_confirm_sig"] = active_sample.get("fields_confirm_sig")
+                else:
+                    job["fields_confirmed"] = True
+                    job["fields_confirm_sig"] = sig
                 samples = merge_sample(
                     job.get("gospd_sample_results") or {},
                     chain_id=active,
@@ -713,11 +849,10 @@ class JobStore:
                     },
                 )
                 job["gospd_sample_results"] = samples
-                job["active_chain_id"] = active
-                # 只同步字段门禁到顶层，禁止用「尚无 evidence 的 sample」全量镜像
-                # 否则会把顶层证据/关系冲成 None，导致「本笔勾稽」永远进不了 Gate4
-                job["fields_confirmed"] = True
-                job["fields_confirm_sig"] = sig
+                # A confirmation request from another tab must not move this
+                # job-wide UI cursor; it only confirms the explicitly named chain.
+                if not requested_chain:
+                    job["active_chain_id"] = active
                 # 字段确认消化本笔 FIELD_GAP_FILL 顾问
                 from src.audit.workpaper_notes import digest_field_advisories_on_confirm
 

@@ -8,6 +8,35 @@ export type ThreeWayDecisionView = {
   slot_reasons?: Record<string, string> | null
   erp_review?: { status?: string; note?: string } | null
   status?: string | null
+  fulfillment?: ThreeWayFulfillment | null
+}
+
+export type ThreeWayFulfillment = {
+  light?: 'GREEN' | 'YELLOW' | 'RED' | string
+  complete_set?: boolean
+  flags?: string[]
+  summary?: string
+  role_files?: Partial<Record<'order' | 'receipt' | 'invoice', string[]>>
+  rows?: Array<{
+    order_line_id?: string
+    ordered_qty?: string | number
+    received_qty?: string | number
+    invoiced_qty?: string | number
+    light?: string
+    flags?: string[]
+  }>
+  allocations?: Array<{
+    source_file?: string
+    source_line_id?: string
+    source_role?: string
+    order_line_id?: string | null
+    qty?: string | number
+    amount?: string | number | null
+    bind_status?: string
+    basis?: string[]
+    review_status?: string
+    rejected_reason?: string | null
+  }>
 }
 
 const DECISION_LABEL: Record<string, string> = {
@@ -106,6 +135,7 @@ export function pickThreeWayDecision(
     job?.three_way_match) as Record<string, unknown> | null | undefined
   if (!tw || typeof tw !== 'object') return null
   const match = (tw.match_result as Record<string, unknown> | undefined) || {}
+  const fulfillment = (tw.fulfillment || match.fulfillment || null) as ThreeWayFulfillment | null
   const decision = (tw.decision as string) || (match.decision as string) || ''
   if (!decision && !tw.hold_reason_code && !match.decision) {
     const status = String(tw.three_way_status || tw.status || match.overall_status || '')
@@ -125,6 +155,7 @@ export function pickThreeWayDecision(
       slot_reasons: (tw.slot_reasons || match.slot_reasons || {}) as Record<string, string>,
       erp_review: (tw.erp_review || match.erp_review || null) as ThreeWayDecisionView['erp_review'],
       status,
+      fulfillment,
     }
   }
   return {
@@ -135,5 +166,6 @@ export function pickThreeWayDecision(
     slot_reasons: (tw.slot_reasons || match.slot_reasons || {}) as Record<string, string>,
     erp_review: (tw.erp_review || match.erp_review || null) as ThreeWayDecisionView['erp_review'],
     status: String(tw.three_way_status || tw.status || match.overall_status || ''),
+    fulfillment,
   }
 }

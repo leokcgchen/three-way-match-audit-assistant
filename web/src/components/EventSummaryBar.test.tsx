@@ -18,7 +18,7 @@ describe('EventSummaryBar', () => {
   it('shows decisions, missing items and automatic passes without technical gate terms', () => {
     render(<EventSummaryBar summary={summary} onPrimary={vi.fn()} />)
     expect(screen.getByText('待处理 3')).toBeInTheDocument()
-    expect(screen.getByText('缺件 1')).toBeInTheDocument()
+    expect(screen.getByText('缺少凭证资料 1')).toBeInTheDocument()
     expect(screen.getByText('自动通过 7')).toBeInTheDocument()
     expect(screen.queryByText(/Gate/i)).not.toBeInTheDocument()
   })

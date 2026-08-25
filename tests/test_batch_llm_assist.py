@@ -19,3 +19,9 @@ def test_batch_llm_assist_env_off(monkeypatch) -> None:
     assert batch_llm_assist_enabled() is False
     monkeypatch.setenv("BATCH_LLM_ASSIST", "off")
     assert batch_llm_assist_enabled() is False
+
+
+def test_batch_llm_assist_is_off_when_key_exists_but_flag_is_absent(monkeypatch) -> None:
+    monkeypatch.delenv("BATCH_LLM_ASSIST", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "valid-looking-key-with-enough-characters")
+    assert batch_llm_assist_enabled() is False

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import { JOURNEY_STEPS, journeyLine, skipStepLabel } from '../lib/userJourney'
-import type { Job, WorkpaperGoal, WorkflowPlan } from '../types'
+import type { Job, WorkpaperGoal } from '../types'
 
 type Props = {
   job: Job
@@ -15,6 +14,7 @@ const CAL_MODES: Array<{ id: string; label: string }> = [
 ]
 
 export function GoalsPage({ job, onJob }: Props) {
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [goals, setGoals] = useState<WorkpaperGoal[]>([])
   const [selected, setSelected] = useState<string[]>(job.goal_ids || [])
   const [periodEnd, setPeriodEnd] = useState(String(job.period_end || ''))
@@ -25,7 +25,6 @@ export function GoalsPage({ job, onJob }: Props) {
   const [fiscalYearStart, setFiscalYearStart] = useState(
     String(job.fiscal_year_start || ''),
   )
-  const [preview, setPreview] = useState<WorkflowPlan | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -48,20 +47,9 @@ export function GoalsPage({ job, onJob }: Props) {
     job.fiscal_year_start,
   ])
 
-  useEffect(() => {
-    let cancelled = false
-    api
-      .previewPlan(selected)
-      .then((p) => {
-        if (!cancelled) setPreview(p)
-      })
-      .catch(() => {
-        if (!cancelled) setPreview(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [selected])
+  useLayoutEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0
+  }, [job.job_id])
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -101,7 +89,7 @@ export function GoalsPage({ job, onJob }: Props) {
         <div>
           <h3>选择底稿目标</h3>
           <div className="hint">
-            只选底稿目标和项目参数。抽样清单、凭证、审阅都在工作台完成。
+            只选底稿目标并填写项目参数。确认后进入独立的抽样清单上传页面。
           </div>
         </div>
         <div className="toolbar">
@@ -110,16 +98,20 @@ export function GoalsPage({ job, onJob }: Props) {
             data-tip={
               selected.length === 0
                 ? '请先勾选至少一个底稿目标。'
-                : '确认目标后进入工作台，在那里上传抽样清单。'
+                : '确认目标后进入抽样清单上传页面。'
             }
           >
             <button className="btn primary" disabled={busy || selected.length === 0} onClick={apply}>
-              确认目标并进入工作台
+              确认目标，并进入抽样清单上传
             </button>
           </span>
         </div>
       </div>
-      <div className="panel-body">
+      <div className="panel-body" ref={bodyRef}>
+        <div className="goal-section-head">
+          <strong>底稿目标选项</strong>
+          <span>可多选，请勾选本次需要填写和导出的全部底稿。</span>
+        </div>
         <div className="goal-grid">
           {goals.map((g) => {
             const on = selected.includes(g.goal_id)
@@ -194,27 +186,6 @@ export function GoalsPage({ job, onJob }: Props) {
           </div>
         </div>
 
-        {preview && selected.length > 0 && (
-          <div className="plan-box">
-            <div>{journeyLine(selected)}</div>
-            <div className="mt-8">
-              <strong>工作台主路径：</strong> {JOURNEY_STEPS.join(' → ')}
-            </div>
-            <div className="mt-8">
-              <strong>导出 sheet：</strong>{' '}
-              {(preview.workbook_sheets || []).join('、') || '—'}
-            </div>
-            {preview.skipped_steps?.length > 0 && (
-              <div className="mt-8 hint">
-                本目标不强制：
-                {preview.skipped_steps
-                  .filter((s) => s === 'contract_terms' || s === 'amount_test')
-                  .map(skipStepLabel)
-                  .join('、') || '无'}
-              </div>
-            )}
-          </div>
-        )}
         {err && <p className="err">{err}</p>}
       </div>
     </div>

@@ -25,6 +25,11 @@ export function AmountAmbiguityPanel({ job, onJob, onOpenCount, onFocusFile }: P
   const [expanded, setExpanded] = useState(true)
   const chainId = job.active_chain_id || undefined
   const loadGen = useRef(0)
+  const activeChainRef = useRef(chainId)
+  activeChainRef.current = chainId
+
+  const isCurrentChainRequest = (requestChain: string | undefined, gen: number) =>
+    requestChain === activeChainRef.current && gen === loadGen.current
 
   const applyItems = (next: AmountAmbiguity[]) => {
     setItems(next)
@@ -40,23 +45,26 @@ export function AmountAmbiguityPanel({ job, onJob, onOpenCount, onFocusFile }: P
       const res = await api.listAmountAmbiguities(job.job_id, chainId, {
         rescan: opts?.rescan === true,
       })
-      if (gen !== loadGen.current) return []
+      if (!isCurrentChainRequest(chainId, gen)) return []
       applyItems(res.items || [])
       setErr('')
       return res.items || []
     } catch (e) {
-      if (gen !== loadGen.current) return []
+      if (!isCurrentChainRequest(chainId, gen)) return []
       applyItems([])
       setErr(e instanceof Error ? e.message : String(e))
       return []
     } finally {
-      if (gen === loadGen.current) setLoading(false)
+      if (isCurrentChainRequest(chainId, gen)) setLoading(false)
     }
   }
 
   useEffect(() => {
     let cancelled = false
-    setItems([])
+    // A previous chain's open cards must never keep the new chain's confirm
+    // button disabled while its request is in flight.
+    applyItems([])
+    setBusyId('')
     setErr('')
     setExpanded(true)
     void (async () => {
@@ -88,6 +96,8 @@ export function AmountAmbiguityPanel({ job, onJob, onOpenCount, onFocusFile }: P
     decision: 'ACCEPT_CANDIDATE' | 'MANUAL_VALUE' | 'DEFER',
     candidateId?: string,
   ) => {
+    const requestChain = chainId
+    const requestGen = loadGen.current
     setBusyId(row.ambiguity_id)
     setErr('')
     focusRow(row)
@@ -105,45 +115,55 @@ export function AmountAmbiguityPanel({ job, onJob, onOpenCount, onFocusFile }: P
               reason: decision === 'DEFER' ? '暂存' : '采用候选',
             }
       const out = await api.decideAmountAmbiguity(job.job_id, row.ambiguity_id, body)
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       onJob(out.job)
       if (decision === 'ACCEPT_CANDIDATE' || decision === 'MANUAL_VALUE') {
         applyItems(items.filter((x) => x.ambiguity_id !== row.ambiguity_id))
       }
       await load({ rescan: false })
     } catch (e) {
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       setErr(e instanceof Error ? e.message : String(e))
       await load({ rescan: false })
     } finally {
-      setBusyId('')
+      if (isCurrentChainRequest(requestChain, requestGen)) setBusyId('')
     }
   }
 
   const rescanAndEnrich = async () => {
+    const requestChain = chainId
+    const requestGen = loadGen.current
     setLoading(true)
     setErr('')
     try {
       const out = await api.scanAmountAmbiguities(job.job_id, chainId)
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       applyItems(out.items || [])
       onJob(out.job)
     } catch (e) {
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      if (isCurrentChainRequest(requestChain, requestGen)) setLoading(false)
     }
   }
 
   const aiReview = async (row: AmountAmbiguity) => {
+    const requestChain = chainId
+    const requestGen = loadGen.current
     setBusyId(row.ambiguity_id)
     setErr('')
     focusRow(row)
     try {
       const out = await api.aiReviewAmountAmbiguity(job.job_id, row.ambiguity_id)
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       onJob(out.job)
       await load({ rescan: false })
     } catch (e) {
+      if (!isCurrentChainRequest(requestChain, requestGen)) return
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusyId('')
+      if (isCurrentChainRequest(requestChain, requestGen)) setBusyId('')
     }
   }
 
@@ -234,7 +254,20 @@ export function AmountAmbiguityPanel({ job, onJob, onOpenCount, onFocusFile }: P
                   {row.file_name} · {title}
                   <span className="hint"> ({row.field_key})</span>
                 </strong>
-                <span className="badge pending">{row.status}</span>
+                <span className="toolbar">
+                  <span className="badge pending">{row.status}</span>
+                  <button
+                    type="button"
+                    className="btn compact"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      focusRow(row)
+                    }}
+                    data-tip="切换到这张单据的原件预览，核对金额候选。"
+                  >
+                    查看原件
+                  </button>
+                </span>
               </header>
               <p className="hint amount-amb-reason">
                 触发：{(row.trigger_reasons || []).join('、') || '—'}

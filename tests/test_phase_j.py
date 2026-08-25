@@ -19,7 +19,8 @@ from tests.test_integration import _sample_request
 
 def test_yuan_to_wan_conversion():
     assert to_wan_yuan(10942.90) == 1.09429
-    assert to_wan_yuan(500.0) == 500.0
+    assert to_wan_yuan(500.0) == 0.05
+    assert to_wan_yuan(500.0, explicit_unit="万元") == 500.0
 
 
 def test_resolve_total_from_tax_inclusive_label():

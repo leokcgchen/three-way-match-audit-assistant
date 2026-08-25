@@ -222,3 +222,37 @@ def test_apply_advisory_rejected_does_not_invalidate():
     fresh = JOB_STORE.get(jid)
     assert fresh["amount_test"]["status"] == "PASS"
     assert fresh["conclusion_confirmed"] is True
+
+
+def test_gap_fill_replay_uses_01030_year_end_calendar_only(monkeypatch):
+    from src.audit.gap_fill_replay import _replay_dirty
+
+    calls = []
+
+    def _fake_three_way(docs, **kwargs):
+        calls.append(kwargs)
+        return {"three_way_status": "PASS", "cutoff_status": "PASS"}
+
+    monkeypatch.setattr("src.audit.gap_fill_replay.run_three_way", _fake_three_way)
+    job = _seed_job(
+        goal_ids=["gospd01030"],
+        plan={"goal_ids": ["gospd01030"], "required_steps": ["three_way_cutoff"]},
+        period_end="2025-12-31",
+        calendar_mode=None,
+        fiscal_year_start="2025-01-01",
+    )
+    _replay_dirty(job["job_id"], ["cutoff"])
+    assert calls[-1] == {
+        "period_end": "2025-12-31",
+        "calendar_mode": "period_end_only",
+        "fiscal_year_start": "2025-01-01",
+    }
+
+    job = _seed_job(
+        goal_ids=["gospd01010"],
+        plan={"goal_ids": ["gospd01010"], "required_steps": ["three_way_cutoff"]},
+        period_end="2025-12-31",
+        calendar_mode=None,
+    )
+    _replay_dirty(job["job_id"], ["cutoff"])
+    assert calls[-1]["calendar_mode"] is None

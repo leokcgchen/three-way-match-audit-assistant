@@ -3,7 +3,10 @@ import { api, type ChainInfo } from '../api'
 import type { ConclusionFinding, ConclusionTrace, Job } from '../types'
 import { ChainPicker } from '../components/ChainPicker'
 import { ThreeWayDecisionCard } from '../components/ThreeWayDecisionCard'
+import { CutoffEvidenceTable, ThreeWayEvidenceTable } from '../components/ConclusionEvidenceTable'
 import { activeSample, isGospdJob } from '../lib/chainDocs'
+import { useActiveChainFiles } from '../lib/useActiveChainFiles'
+import { storeFieldTraceTarget, type FieldTraceTarget } from '../lib/fieldTraceNavigation'
 import { resultOverallStatus } from '../lib/testStatus'
 import { listChainsCached } from '../lib/chainsCache'
 import { conclusionTraceCached } from '../lib/conclusionTraceCache'
@@ -97,7 +100,12 @@ function groupFindings(findings: ConclusionFinding[]) {
     }))
 }
 
-function FailCard({ finding }: { finding: ConclusionFinding }) {
+function FailCard({ finding, job, chainFileNames, onTrace }: {
+  finding: ConclusionFinding
+  job: Job
+  chainFileNames?: string[] | null
+  onTrace: (target: FieldTraceTarget) => void
+}) {
   const cmps = (finding.comparisons || []).filter((c) => {
     const st = String(c.status || '').toUpperCase()
     return st.includes('FAIL') || st.includes('WARN') || st.includes('不')
@@ -109,29 +117,40 @@ function FailCard({ finding }: { finding: ConclusionFinding }) {
     cmps.length === 0 && periodRows.length === 0 && (finding.fields_used || []).length > 0
   const showDecision =
     finding.module === 'three_way' || String(finding.step || '').startsWith('three')
+  const isCutoff = finding.module === 'cutoff' || finding.step === 'cutoff'
   return (
-    <article className="fail-card">
-      <header className="fail-card-head">
-        <strong>{finding.step_label || finding.title}</strong>
-        <span className={`badge ${finding.blocking ? 'danger' : 'warn'}`}>{finding.status}</span>
-      </header>
-      {showDecision && (finding.decision || finding.hold_reason_code) ? (
-        <ThreeWayDecisionCard
-          view={{
-            decision: finding.decision,
-            decision_reasons: finding.decision_reasons,
-            hold_reason_code: finding.hold_reason_code,
-            quantity_roles: finding.quantity_roles,
-            slot_reasons: finding.slot_reasons,
-            erp_review: finding.erp_review,
-            status: finding.status,
-          }}
-        />
+    <article className={`fail-card${isCutoff ? ' fail-card-cutoff' : ''}`}>
+      {!isCutoff ? (
+        <header className="fail-card-head">
+          <strong>{finding.step_label || finding.title}</strong>
+          <span className={`badge ${finding.blocking ? 'danger' : 'warn'}`}>{finding.status}</span>
+        </header>
       ) : null}
-      <section>
-        <h4>不通过原因</h4>
-        <p>{expandThreeWayShorthand(finding.summary || finding.title)}</p>
-      </section>
+      {showDecision && (finding.decision || finding.hold_reason_code) ? (
+        <>
+          <ThreeWayDecisionCard
+            view={{
+              decision: finding.decision,
+              decision_reasons: finding.decision_reasons,
+              hold_reason_code: finding.hold_reason_code,
+              quantity_roles: finding.quantity_roles,
+              slot_reasons: finding.slot_reasons,
+              erp_review: finding.erp_review,
+              fulfillment: finding.fulfillment,
+              status: finding.status,
+            }}
+          />
+          <ThreeWayEvidenceTable job={job} chainFileNames={chainFileNames} onTrace={onTrace} />
+        </>
+      ) : null}
+      {isCutoff ? (
+        <CutoffEvidenceTable finding={finding} jobId={job.job_id} chainId={job.active_chain_id || ''} onTrace={onTrace} />
+      ) : (
+        <section className="conclusion-language-reason">
+          <h4>结论说明</h4>
+          <p>{expandThreeWayShorthand(finding.summary || finding.title)}</p>
+        </section>
+      )}
       {cmps.length > 0 && (
         <section>
           <h4>什么数据没对上</h4>
@@ -142,7 +161,7 @@ function FailCard({ finding }: { finding: ConclusionFinding }) {
           </ul>
         </section>
       )}
-      {periodRows.length > 0 && (
+      {periodRows.length > 0 && finding.module !== 'cutoff' && finding.step !== 'cutoff' && (
         <section>
           <h4>期间判断</h4>
           <ul>
@@ -174,7 +193,7 @@ function FailCard({ finding }: { finding: ConclusionFinding }) {
   )
 }
 
-export function ConclusionPage({ job, onJob }: Props) {
+export function ConclusionPage({ job, onJob, onGo }: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [trace, setTrace] = useState<ConclusionTrace | null>(null)
@@ -184,6 +203,7 @@ export function ConclusionPage({ job, onJob }: Props) {
   const gate5Ok = Boolean(sample ? sample.conclusion_confirmed : job.conclusion_confirmed)
   const disposition = String(sample?.conclusion_disposition || '')
   const activeChain = job.active_chain_id || ''
+  const { chainFileNames } = useActiveChainFiles(job)
   const decisionView = useMemo(
     () =>
       pickThreeWayDecision(
@@ -244,6 +264,11 @@ export function ConclusionPage({ job, onJob }: Props) {
   }, [trace, activeChain])
 
   const groups = useMemo(() => groupFindings(findings), [findings])
+
+  const traceToField = (target: FieldTraceTarget) => {
+    storeFieldTraceTarget(target)
+    onGo('field_confirm')
+  }
 
   const confirmFail = async () => {
     setBusy(true)
@@ -307,7 +332,10 @@ export function ConclusionPage({ job, onJob }: Props) {
         ) : (
           <>
             {decisionView && !findings.some((f) => f.decision) ? (
-              <ThreeWayDecisionCard view={decisionView} />
+              <>
+                <ThreeWayDecisionCard view={decisionView} />
+                <ThreeWayEvidenceTable job={job} chainFileNames={chainFileNames} onTrace={traceToField} />
+              </>
             ) : null}
             {!findings.length && (
               <p className="preview-empty">当前笔没有未通过项。绿灯笔会自动收口，不必停在本页。</p>
@@ -319,7 +347,7 @@ export function ConclusionPage({ job, onJob }: Props) {
                   {g.hint ? <p>{g.hint}</p> : null}
                 </header>
                 {g.items.map((f) => (
-                  <FailCard key={f.finding_id} finding={f} />
+                  <FailCard key={f.finding_id} finding={f} job={job} chainFileNames={chainFileNames} onTrace={traceToField} />
                 ))}
               </section>
             ))}

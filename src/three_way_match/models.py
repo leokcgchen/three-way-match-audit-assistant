@@ -16,6 +16,7 @@ HoldReasonCode = Literal[
     "AMBIGUOUS_BINDING",
     "DOCUMENT_MISSING",
     "AWAITING_ERP",
+    "PARTIAL_SET",
 ]
 
 class Order(BaseModel):

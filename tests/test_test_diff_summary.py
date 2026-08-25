@@ -44,3 +44,25 @@ def test_sample_diff_lines_show_left_right_values():
     lines = sample_diff_lines(sample)
     assert any("订单数量 100" in x and "签收/验收数量 98" in x for x in lines)
     assert any("签收/控制权 2025-08-10" in x and "入账 2025-07-31" in x for x in lines)
+
+
+def test_sample_diff_lines_explain_fulfillment_model_conflict():
+    sample = {
+        "three_way_match": {
+            "status": "FAIL",
+            "fulfillment": {
+                "flags": [
+                    "STRONG_MODEL_CONFLICT",
+                    "PARTIAL_FULFILLMENT",
+                    "OVER_INVOICE_QTY",
+                ],
+                "summary": "订单 10，累计签收 0，累计开票 10",
+            },
+        }
+    }
+
+    lines = sample_diff_lines(sample)
+
+    assert lines
+    assert "规格型号冲突" in lines[0]
+    assert "订单 10，累计签收 0，累计开票 10" in lines[0]

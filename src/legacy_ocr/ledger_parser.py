@@ -225,6 +225,7 @@ def build_ledger_index(
             "posting_date": posting,
             "amount": amount,
             "biz_id": norm,
+            "biz_id_column": biz_col,
         }
         index[norm] = entry
         compact = compact_biz_id(norm)
@@ -368,29 +369,49 @@ def apply_ledger_to_classified(
     for item in classified:
         row = dict(item)
         fields = dict(row.get("fields") or {})
-        biz_keys = collect_document_biz_keys(fields)
-        for k in extract_biz_ids_from_filename(str(row.get("file_name") or "")):
-            if k not in biz_keys:
-                biz_keys.append(k)
-        if row.get("doc_type") == "invoice":
-            for k in extra_order_keys:
+        sample_business_id = normalize_biz_id(row.get("sample_business_id"))
+        if sample_business_id:
+            biz_keys = [sample_business_id]
+        else:
+            biz_keys = collect_document_biz_keys(fields)
+            for k in extract_biz_ids_from_filename(str(row.get("file_name") or "")):
                 if k not in biz_keys:
                     biz_keys.append(k)
 
         hit = lookup_posting_date(ledger_index, biz_keys)
-        primary = primary_biz_key_for_match(fields)
-        if primary == "（无业务编号）" and extra_order_keys:
-            primary = extra_order_keys[0]
-        elif primary == "（无业务编号）" and order_fields:
+        primary = sample_business_id or primary_biz_key_for_match(fields)
+        if primary == "（无业务编号）" and order_fields:
             primary = primary_biz_key_for_match(order_fields)
+        query_biz = normalize_biz_id(biz_keys[0]) if biz_keys else None
+        ledger_index_column = None
+        if hit:
+            ledger_index_column = hit.get("biz_id_column")
+        if not ledger_index_column:
+            ledger_index_column = next(
+                (
+                    entry.get("biz_id_column")
+                    for entry in ledger_index.values()
+                    if isinstance(entry, dict) and entry.get("biz_id_column")
+                ),
+                None,
+            )
 
         if hit:
             matched_biz = hit.get("matched_key") or hit.get("biz_id")
-            query_biz = hit.get("query_key")
+            query_biz = hit.get("query_key") or query_biz
             row["ledger_posting_date"] = hit["posting_date"]
             row["ledger_match_ok"] = True
             row["ledger_matched_biz_id"] = matched_biz
             row["ledger_query_biz_id"] = query_biz
+            row["ledger_index_column"] = ledger_index_column
+            row["ledger_match_reason"] = {
+                "code": "MATCHED",
+                "message": "凭证业务编号已在序时账业务主键列中找到相同值。",
+                "document_index": sample_business_id or query_biz,
+                "document_index_source": row.get("business_index_source") or "legacy_document_key",
+                "ledger_index_column": ledger_index_column,
+                "query_value": query_biz,
+            }
             if hit.get("amount") is not None:
                 row["ledger_amount"] = hit["amount"]
             if query_biz and matched_biz and query_biz != matched_biz:
@@ -406,14 +427,29 @@ def apply_ledger_to_classified(
             row["ledger_posting_date"] = None
             row["ledger_match_ok"] = False
             row["ledger_matched_biz_id"] = None
-            row["ledger_query_biz_id"] = None
+            row["ledger_query_biz_id"] = query_biz
+            row["ledger_index_column"] = ledger_index_column
             row.pop("ledger_amount", None)
-            if row.get("doc_type") in {"invoice", "order"}:
-                row["ledger_match_message"] = (
-                    f"未匹配：订单号 {primary} 在序时账中不存在"
-                )
+            if query_biz:
+                row["ledger_match_message"] = f"未匹配：业务编号 {query_biz}"
+                row["ledger_match_reason"] = {
+                    "code": "NOT_FOUND",
+                    "message": "序时账业务主键列中未找到与凭证业务编号相同的值。",
+                    "document_index": sample_business_id or query_biz,
+                    "document_index_source": row.get("business_index_source") or "legacy_document_key",
+                    "ledger_index_column": ledger_index_column,
+                    "query_value": query_biz,
+                }
             else:
-                row["ledger_match_message"] = None
+                row["ledger_match_message"] = "无法关联：未取得抽样业务编号"
+                row["ledger_match_reason"] = {
+                    "code": "MISSING_DOCUMENT_INDEX",
+                    "message": "凭证未取得抽样清单业务编号，未执行序时账查询。",
+                    "document_index": None,
+                    "document_index_source": row.get("business_index_source"),
+                    "ledger_index_column": ledger_index_column,
+                    "query_value": None,
+                }
         updated.append(row)
     return updated
 

@@ -1,0 +1,66 @@
+{
+  "task_id": "MOCK-1N-PARTIAL",
+  "complete_set": false,
+  "note": "Same 3 receipts (30+40+30) but invoice only 70/700. Default: uploaded-so-far, yellow. If complete_set=true: red.",
+  "classified": [
+    {
+      "file_name": "PO_SO001.pdf",
+      "doc_type": "order",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "SO001",
+        "documentDate": "2026-01-02",
+        "supplierName": "Supplier A",
+        "buyerName": "Buyer A",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "100", "unit": "PCS", "unitPrice": "10", "amount": "1000"}
+        ]
+      }
+    },
+    {
+      "file_name": "GRN_POD001.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD001",
+        "items": [{"lineNo": "10", "itemCode": "MAT-1", "quantity": "30", "unit": "PCS", "amount": "300"}]
+      }
+    },
+    {
+      "file_name": "GRN_POD002.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD002",
+        "items": [{"lineNo": "10", "itemCode": "MAT-1", "quantity": "40", "unit": "PCS", "amount": "400"}]
+      }
+    },
+    {
+      "file_name": "GRN_POD003.pdf",
+      "doc_type": "receipt",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "POD003",
+        "items": [{"lineNo": "10", "itemCode": "MAT-1", "quantity": "30", "unit": "PCS", "amount": "300"}]
+      }
+    },
+    {
+      "file_name": "INV_INV001_partial.pdf",
+      "doc_type": "invoice",
+      "confidence": 0.99,
+      "fields": {
+        "orderNo": "SO001",
+        "documentNo": "INV001",
+        "supplierName": "Supplier A",
+        "buyerName": "Buyer A",
+        "items": [
+          {"lineNo": "10", "itemCode": "MAT-1", "quantity": "70", "unit": "PCS", "unitPrice": "10", "amount": "700"}
+        ]
+      }
+    }
+  ]
+}

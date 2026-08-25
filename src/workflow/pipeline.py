@@ -245,8 +245,10 @@ def _process_one_file(
     forced_doc_type: str = "",
     target_fields: Optional[list[str]] = None,
     fast_batch: bool = False,
+    allow_llm_field_supplement: bool = False,
     source_packet: Optional[dict[str, Any]] = None,
     packet_keys: Optional[dict[str, Any]] = None,
+    declared_business_ids: Optional[list[str]] = None,
     demo_delay_sec: Optional[float] = None,
 ) -> dict[str, Any]:
     from src.legacy_ocr import LegacyOcrAdapter
@@ -261,7 +263,7 @@ def _process_one_file(
         cached = lookup_demo_ocr(filename)
         if cached:
             delay = 0.18 if demo_delay_sec is None else float(demo_delay_sec)
-            return apply_demo_hit(
+            demo_item = apply_demo_hit(
                 filename=filename,
                 path=str(path),
                 fingerprint=fp,
@@ -271,6 +273,9 @@ def _process_one_file(
                 packet_keys=packet_keys,
                 delay_sec=delay,
             )
+            if declared_business_ids:
+                demo_item["declared_business_ids"] = list(declared_business_ids)
+            return demo_item
         adapter = LegacyOcrAdapter()
         ocr = adapter.recognize_document(str(path), "other", allow_degraded=True)
         raw_text = str(ocr.get("rawText") or "")
@@ -298,6 +303,7 @@ def _process_one_file(
                     ocr_type,
                     target_fields=keys,
                     fast_batch=fast_batch,
+                    allow_llm_field_supplement=allow_llm_field_supplement,
                 )
                 or {}
             )
@@ -323,9 +329,12 @@ def _process_one_file(
             "error": ocr_error,
             "file_fingerprint": fp,
             "extract_field_keys": keys,
+            "type_uncertain": final_type == "other",
         }
         if source_packet:
             doc_item["source_packet"] = dict(source_packet)
+        if declared_business_ids:
+            doc_item["declared_business_ids"] = list(declared_business_ids)
         if ocr.get("ocr_image_path"):
             doc_item["ocr_image_path"] = str(ocr["ocr_image_path"])
         if ocr.get("preprocess"):
@@ -335,6 +344,9 @@ def _process_one_file(
             source=ocr_source or "ocr",
             extractor="recognize_then_extract",
         )
+        from src.workflow.field_resolution.evidence_inventory import attach_document_evidence
+
+        attach_document_evidence(doc_item)
         try:
             from src.workflow.amount_ambiguity import scan_document
 
@@ -356,7 +368,7 @@ def _process_one_file(
     except Exception as exc:  # noqa: BLE001
         final_type = forced_doc_type or classify_document(filename, "", slot_hint=slot_hint)
         fields = fallback_fields_from_filename(filename, final_type)
-        return {
+        failed_item = {
             "file_name": filename,
             "path": "",
             "doc_type": final_type,
@@ -366,7 +378,14 @@ def _process_one_file(
             "ocr_source": "failed",
             "error": f"处理异常：{exc}",
             "file_fingerprint": fp,
+            "type_uncertain": final_type == "other",
         }
+        if declared_business_ids:
+            failed_item["declared_business_ids"] = list(declared_business_ids)
+        from src.workflow.field_resolution.evidence_inventory import attach_document_evidence
+
+        attach_document_evidence(failed_item)
+        return failed_item
 
 
 def process_uploaded_files(
@@ -378,6 +397,7 @@ def process_uploaded_files(
     field_plan: Optional[dict[str, Any]] = None,
     progress_callback: Optional[Any] = None,
     skip_gap_fill: Optional[bool] = None,
+    allow_llm_field_supplement: bool = False,
 ) -> list[dict[str, Any]]:
     """保存文件 → OCR → 分类 → 抽字段 → seed_field_meta；并发处理。
 
@@ -434,6 +454,7 @@ def process_uploaded_files(
                     "doc_type": forced_type,
                     "source_packet": spec.get("source_packet"),
                     "packet_keys": spec.get("keys") or spec.get("packet_keys"),
+                    "declared_business_ids": list(spec.get("declared_business_ids") or []),
                 }
             )
 
@@ -464,12 +485,14 @@ def process_uploaded_files(
                 forced_doc_type=p.get("doc_type") or "",
                 source_packet=p.get("source_packet") if isinstance(p.get("source_packet"), dict) else None,
                 packet_keys=p.get("packet_keys") if isinstance(p.get("packet_keys"), dict) else None,
+                declared_business_ids=list(p.get("declared_business_ids") or []),
                 target_fields=resolve_target_fields(
                     p.get("doc_type")
                     or classify_document(p["filename"], "", slot_hint=p["slot_hint"]),
                     field_plan,
                 ),
                 fast_batch=batch_fast,
+                allow_llm_field_supplement=allow_llm_field_supplement,
                 demo_delay_sec=demo_delay,
             )
 
@@ -547,6 +570,8 @@ def apply_ledger_to_classified_list(
     classified: list[dict[str, Any]],
     ledger_rows: list[dict[str, Any]],
     ledger_mapping: dict[str, Any],
+    *,
+    sample_population: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     import pandas as pd
 
@@ -560,6 +585,16 @@ def apply_ledger_to_classified_list(
         for item in classified:
             item["ledger_evaluated"] = False
         return classified
+    if sample_population:
+        from src.workflow.sample_scope import resolve_sample_business_identity
+
+        for item in classified:
+            identity = resolve_sample_business_identity(item, sample_population)
+            if identity.get("status") != "MATCHED":
+                continue
+            item["sample_business_id"] = identity["sample_business_id"]
+            item["business_index_source"] = identity["source"]
+            item["business_index_candidates"] = identity["candidates"]
     df = pd.DataFrame(ledger_rows)
     index = build_ledger_index(df, ledger_mapping)
     workflow_keys = collect_workflow_biz_keys(classified)
@@ -579,18 +614,90 @@ def run_evidence(
     *,
     existing_advisory: Optional[list[dict[str, Any]]] = None,
     with_llm_disambiguation: Optional[bool] = None,
+    require_contract: bool = True,
+    require_ledger: bool = True,
 ) -> dict[str, Any]:
     from config.settings import settings
     from src.evidence_match import build_evidence_chain
+    from src.legacy_ocr.ledger_parser import (
+        collect_document_biz_keys,
+        compact_biz_id,
+        extract_biz_ids_from_filename,
+    )
     from src.llm.verifier import evidence_blob_from_documents
 
     active = [x for x in classified if not x.get("excluded_from_match")]
+    manual_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in active:
+        group_id = str(item.get("business_group_id") or "").strip()
+        if group_id:
+            manual_groups.setdefault(group_id, []).append(item)
+
+    def _group_matches_ledger(group_docs: list[dict[str, Any]], ledger_id: Any) -> bool:
+        ledger_key = compact_biz_id(ledger_id)
+        if not ledger_key:
+            return False
+        for doc in group_docs:
+            direct_keys: list[Any] = [
+                doc.get("business_group_id"),
+                doc.get("sample_business_id"),
+            ]
+            business_ids = doc.get("business_ids")
+            if isinstance(business_ids, (list, tuple, set)):
+                direct_keys.extend(business_ids)
+            elif business_ids:
+                direct_keys.append(business_ids)
+            if any(compact_biz_id(key) == ledger_key for key in direct_keys if key):
+                return True
+            fields = dict(doc.get("fields") or {})
+            keys = collect_document_biz_keys(fields)
+            keys.extend(extract_biz_ids_from_filename(str(doc.get("file_name") or "")))
+            # Keep the selection check aligned with evidence linker: an
+            # explicit field is a valid cross-reference even if it is shorter
+            # than the OCR parser's business-id heuristic.
+            keys.extend(
+                fields.get(name)
+                for name in ("documentNo", "contractNo", "orderNo", "invoiceNo", "warehouseNo")
+                if fields.get(name) is not None
+            )
+            if any(compact_biz_id(key) == ledger_key for key in keys):
+                return True
+        return False
+
+    verified_groups: dict[str, list[str]] = {}
+    for group_id, group_docs in manual_groups.items():
+        for doc in group_docs:
+            ledger_id = doc.get("ledger_matched_biz_id")
+            if ledger_id and _group_matches_ledger(group_docs, ledger_id):
+                verified_groups.setdefault(group_id, []).append(str(ledger_id))
+
+    selection_issue = ""
+    selected_ledger_id: Optional[str] = None
+    if len(verified_groups) == 1:
+        target_group_id, ledger_ids = next(iter(verified_groups.items()))
+        active = list(manual_groups[target_group_id])
+        selected_ledger_id = ledger_ids[0]
+    elif len(verified_groups) > 1:
+        active = []
+        selection_issue = "人工业务分组存在多个可验证序时账匹配，无法确定当前证据链（歧义）"
+    else:
+        # Unassigned documents are a separate machine-matching population and
+        # must not supplement a manually assigned packet.
+        active = [
+            x for x in active if not str(x.get("business_group_id") or "").strip()
+        ]
     inv = next((x for x in active if x.get("doc_type") == "invoice"), None)
     result = build_evidence_chain(
         active,
-        ledger_matched_biz_id=(inv or {}).get("ledger_matched_biz_id"),
+        ledger_matched_biz_id=selected_ledger_id or (inv or {}).get("ledger_matched_biz_id"),
         ledger_posting_date=(inv or {}).get("ledger_posting_date"),
+        require_contract=require_contract,
+        require_ledger=require_ledger,
     )
+    if selection_issue:
+        result.status = "FAIL"
+        result.issue_description = selection_issue
+        result.human_readable_summary = selection_issue
     payload = result.model_dump()
     if with_llm_disambiguation is None:
         flag = (
@@ -881,6 +988,370 @@ def serialize_three_way_result(raw: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _apply_fulfillment_decision(
+    result: dict[str, Any], fulfillment: dict[str, Any]
+) -> dict[str, Any]:
+    """用一对多履约语义协调旧标量结论，但不掩盖无关的明确失败。"""
+
+    if not fulfillment.get("rows"):
+        return result
+    match_result = result.get("match_result")
+    if not isinstance(match_result, dict):
+        return result
+    flags = {str(flag) for flag in (fulfillment.get("flags") or [])}
+    light = str(fulfillment.get("light") or "").upper()
+    comparisons = list(match_result.get("comparisons") or [])
+    failed_fields = {
+        str(item.get("field_name") or "")
+        for item in comparisons
+        if isinstance(item, dict) and item.get("is_consistent") is False
+    }
+    only_fulfillment_failures = failed_fields <= {"quantity", "total_amount"}
+    reasons = list(match_result.get("decision_reasons") or [])
+
+    status: Optional[str] = None
+    hold_code: Optional[str] = None
+    reason: Optional[str] = None
+    if light == "RED":
+        status = "FAIL"
+        if "SET_CLAIMED_INCOMPLETE" in flags:
+            hold_code = "PARTIAL_SET"
+            reason = "已声明齐套但资料仍不完整"
+        else:
+            hold_code = "PAPER_FIELD"
+            reason = "一对多累计存在超额或重复分配"
+    elif light == "YELLOW" and ({"AMBIGUOUS_LINK", "UNBOUND"} & flags):
+        if only_fulfillment_failures:
+            status = "WARNING"
+            hold_code = "AMBIGUOUS_BINDING"
+            reason = "一对多来源行无法唯一绑定，须人工复核"
+    elif light == "YELLOW" and only_fulfillment_failures:
+        status = "WARNING"
+        hold_code = "PARTIAL_SET"
+        partial = []
+        if "PARTIAL_FULFILLMENT" in flags:
+            partial.append("签收")
+        if "PARTIAL_INVOICE" in flags or "PARTIAL_INVOICE_AMT" in flags:
+            partial.append("开票")
+        reason = f"当前资料部分{'、'.join(partial) or '履约'}"
+
+    if status and hold_code and reason:
+        match_result["overall_status"] = status
+        match_result["decision"] = "HOLD_REVIEW"
+        match_result["hold_reason_code"] = hold_code
+        match_result["decision_reasons"] = list(dict.fromkeys([reason, *reasons]))
+        match_result["summary"] = f"三单匹配待复核（HOLD_REVIEW）：{reason}"
+        result["match_result"] = match_result
+        result["decision"] = "HOLD_REVIEW"
+        result["hold_reason_code"] = hold_code
+        result["decision_reasons"] = match_result["decision_reasons"]
+    return result
+
+
+def cutoff_calendar_mode(goal_ids: list[str], configured: Optional[str]) -> Optional[str]:
+    """01030 的本财年年末边界测试默认仅按 period_end 分侧。"""
+    return configured or ("period_end_only" if "gospd01030" in goal_ids else None)
+
+
+def _explicit_group_filter(
+    classified: list[dict[str, Any]], business_group_id: Optional[str]
+) -> Optional[str]:
+    """仅当输入确有组元数据时再过滤；API 传入的当前链通常已完成裁剪。"""
+    wanted = str(business_group_id or "").strip()
+    if not wanted:
+        return None
+    for item in classified:
+        if str(item.get("business_group_id") or "").strip() == wanted:
+            return wanted
+        ids = {str(value).strip() for value in (item.get("business_ids") or [])}
+        if wanted in ids:
+            return wanted
+    return None
+
+
+def _number_value(value: Any) -> float:
+    try:
+        return float(str(value or "").replace(",", "").replace("¥", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _normalized_reference(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _document_contains_reference(item: dict[str, Any], reference: str) -> bool:
+    fields = dict(item.get("fields") or {})
+    blob = " ".join(
+        str(value or "")
+        for value in (
+            fields.get("documentNo"), fields.get("orderNo"), fields.get("contractNo"),
+            fields.get("remarks"), item.get("raw_text"), item.get("ocr_text"),
+        )
+    )
+    return bool(reference and reference in _normalized_reference(blob))
+
+
+def _contract_order_anchor(
+    classified: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """无订单时，只允许唯一、可复算且被全部凭证引用的合同充当内部锚点。"""
+    active = [item for item in classified if not item.get("excluded_from_match")]
+    if any(str(item.get("doc_type") or "").lower() == "order" for item in active):
+        return None
+    contracts = [
+        item for item in active
+        if str(item.get("doc_type") or "").lower() == "contract"
+    ]
+    if len(contracts) != 1:
+        return None
+    contract = contracts[0]
+    fields = dict(contract.get("fields") or {})
+    contract_no = str(fields.get("contractNo") or fields.get("documentNo") or "").strip()
+    customer = str(
+        fields.get("customerName") or fields.get("buyerName")
+        or fields.get("supplierName") or ""
+    ).strip()
+    items = [row for row in (fields.get("items") or []) if isinstance(row, dict)]
+    quantity = _number_value(fields.get("quantity")) or sum(
+        _number_value(row.get("quantity") or row.get("qty")) for row in items
+    )
+    amount = _number_value(fields.get("totalAmount") or fields.get("amount")) or sum(
+        _number_value(
+            row.get("totalAmount")
+            if row.get("totalAmount") not in (None, "")
+            else _number_value(row.get("amount")) + _number_value(row.get("taxAmount"))
+        )
+        for row in items
+    )
+    reference = _normalized_reference(contract_no)
+    evidence_docs = [
+        item for item in active
+        if str(item.get("doc_type") or "").lower()
+        in {"receipt", "delivery", "invoice"}
+    ]
+    has_receipt = any(
+        str(item.get("doc_type") or "").lower() in {"receipt", "delivery"}
+        for item in evidence_docs
+    )
+    has_invoice = any(
+        str(item.get("doc_type") or "").lower() == "invoice"
+        for item in evidence_docs
+    )
+    if (
+        not contract_no or not customer or (quantity <= 0 and amount <= 0)
+        or not has_receipt or not has_invoice
+        or any(not _document_contains_reference(item, reference) for item in evidence_docs)
+    ):
+        return None
+    anchor_fields = dict(fields)
+    anchor_fields["orderNo"] = contract_no
+    anchor_fields["documentNo"] = contract_no
+    anchor_fields["contractNo"] = contract_no
+    if quantity > 0:
+        anchor_fields["quantity"] = quantity
+    if amount > 0:
+        anchor_fields["totalAmount"] = amount
+    return {
+        **contract,
+        "file_name": str(contract.get("file_name") or "合同") + "#合同锚点",
+        "doc_type": "order",
+        "fields": anchor_fields,
+        "_anchor_source": "CONTRACT_AS_ORDER_ANCHOR",
+    }
+
+
+def _document_customer(fields: dict[str, Any]) -> str:
+    return str(
+        fields.get("customerName") or fields.get("buyerName")
+        or fields.get("clientName") or fields.get("supplierName") or ""
+    ).strip()
+
+
+def _document_gross_amount(fields: dict[str, Any]) -> float:
+    direct = _number_value(fields.get("totalAmount"))
+    if direct > 0:
+        return direct
+    rows = [row for row in (fields.get("items") or []) if isinstance(row, dict)]
+    total = 0.0
+    for row in rows:
+        gross = _number_value(row.get("totalAmount"))
+        if gross <= 0:
+            gross = _number_value(row.get("amount") or row.get("netAmount"))
+            if gross > 0:
+                gross += _number_value(row.get("taxAmount"))
+        total += gross
+    return round(total, 2)
+
+
+def _apply_per_invoice_checks(
+    result: dict[str, Any],
+    classified: list[dict[str, Any]],
+    request: Any,
+    matcher: Any,
+    *,
+    period_end: Optional[str],
+    calendar_mode: Optional[str],
+    fiscal_year_start: Optional[str],
+) -> dict[str, Any]:
+    """逐张发票校验购方、业务引用和截止性，禁止汇总值掩盖单张异常。"""
+    from src.utils.supplier_normalize import suppliers_are_consistent
+
+    invoices = [
+        item for item in classified
+        if str(item.get("doc_type") or "").lower() == "invoice"
+        and not item.get("excluded_from_match")
+    ]
+    if not invoices:
+        result["invoice_checks"] = []
+        result["invoice_cutoff_status"] = "SKIPPED"
+        return result
+
+    anchor_customer = str(request.order.supplier_name or "").strip()
+    anchor_refs = {
+        _normalized_reference(value)
+        for value in (request.order.order_no, request.order.contract_no)
+        if _normalized_reference(value) not in {"", "UNKNOWN", "POMANUAL"}
+    }
+    receipt_date = str(request.warehouse_receipt.receipt_date or "").strip()
+    checks: list[dict[str, Any]] = []
+    failed_comparisons: list[dict[str, Any]] = []
+
+    for item in invoices:
+        fields = dict(item.get("fields") or {})
+        file_name = str(item.get("file_name") or "未命名发票")
+        invoice_no = str(
+            fields.get("invoiceNo") or fields.get("documentNo") or file_name
+        ).strip()
+        invoice_customer = _document_customer(fields)
+        customer_ok = bool(
+            anchor_customer and invoice_customer
+            and suppliers_are_consistent(anchor_customer, invoice_customer)
+        )
+        reference_ok = bool(
+            anchor_refs
+            and any(_document_contains_reference(item, ref) for ref in anchor_refs)
+        )
+
+        if not customer_ok:
+            failed_comparisons.append(
+                {
+                    "field_name": "invoice_customer",
+                    "order_value": anchor_customer,
+                    "receipt_value": None,
+                    "invoice_value": invoice_customer,
+                    "is_consistent": False,
+                    "diff_description": f"发票 {file_name} 的购方名称缺失或与业务锚点不一致",
+                    "auditor_explain": "每张发票必须分别与订单或合格合同的客户名称勾稽。",
+                }
+            )
+        if not reference_ok:
+            failed_comparisons.append(
+                {
+                    "field_name": "invoice_business_reference",
+                    "order_value": sorted(anchor_refs),
+                    "receipt_value": None,
+                    "invoice_value": fields.get("orderNo") or fields.get("contractNo") or fields.get("remarks"),
+                    "is_consistent": False,
+                    "diff_description": f"发票 {file_name} 未包含与业务锚点完全一致的订单号或合同号",
+                    "auditor_explain": "发票必须逐张确认归属于当前抽样业务，不能仅凭汇总金额放行。",
+                }
+            )
+
+        posting_date = str(fields.get("postingDate") or "").strip()
+        cutoff_status = "SKIPPED"
+        cutoff_result: Optional[dict[str, Any]] = None
+        cutoff_reason: Optional[str] = None
+        if not posting_date:
+            cutoff_reason = "该发票缺少入账日期"
+        elif not receipt_date or receipt_date in {"UNRESOLVED", "1970-01-01", "None", "null"}:
+            cutoff_reason = "当前业务缺少控制权转移/签收日期"
+        else:
+            try:
+                invoice_request = request.model_copy(
+                    update={
+                        "invoice": request.invoice.model_copy(
+                            update={
+                                "invoice_no": invoice_no,
+                                "order_no": str(
+                                    fields.get("orderNo") or fields.get("contractNo")
+                                    or request.order.order_no
+                                ),
+                                "supplier_name": invoice_customer,
+                                "total_amount": _document_gross_amount(fields),
+                                "invoice_date": fields.get("documentDate"),
+                                "posting_date": posting_date,
+                            }
+                        )
+                    }
+                )
+                payload = matcher.build_cutoff_payload(
+                    invoice_request, period_end=period_end
+                )
+                response = matcher._call_cutoff_inprocess(
+                    payload,
+                    calendar_mode=calendar_mode,
+                    fiscal_year_start=fiscal_year_start,
+                )
+                cutoff_status = str(response.测试状态)
+                cutoff_result = response.model_dump()
+            except Exception as exc:
+                cutoff_reason = f"该发票截止性未执行：{exc}"
+
+        checks.append(
+            {
+                "file_name": file_name,
+                "invoice_no": invoice_no,
+                "customer_status": "PASS" if customer_ok else "FAIL",
+                "business_reference_status": "PASS" if reference_ok else "FAIL",
+                "cutoff_status": cutoff_status,
+                "cutoff_result": cutoff_result,
+                "cutoff_skipped_reason": cutoff_reason,
+            }
+        )
+
+    cutoff_rank = {"SKIPPED": 0, "PASS": 1, "WARNING": 2, "FAIL": 3}
+    worst = max(checks, key=lambda row: cutoff_rank.get(str(row["cutoff_status"]), 0))
+    worst_status = str(worst["cutoff_status"])
+    result["invoice_checks"] = checks
+    result["invoice_cutoff_status"] = worst_status
+    result["cutoff_status"] = worst_status
+    result["cutoff_result"] = worst.get("cutoff_result")
+    result["cutoff_available"] = any(
+        row["cutoff_status"] != "SKIPPED" for row in checks
+    )
+    result["cutoff_skipped_reason"] = (
+        worst.get("cutoff_skipped_reason") if worst_status == "SKIPPED" else None
+    )
+    if worst.get("cutoff_result"):
+        result["cutoff_summary"] = str(
+            worst["cutoff_result"].get("问题描述") or "逐张发票截止性已执行"
+        )
+
+    if failed_comparisons:
+        match_result = dict(result.get("match_result") or {})
+        comparisons = list(match_result.get("comparisons") or [])
+        comparisons.extend(failed_comparisons)
+        reason = "至少一张发票的购方名称或业务引用未通过逐张校验"
+        match_result.update(
+            {
+                "overall_status": "FAIL",
+                "decision": "HOLD_REVIEW",
+                "hold_reason_code": "PAPER_FIELD",
+                "comparisons": comparisons,
+                "decision_reasons": list(dict.fromkeys(
+                    [reason, *(match_result.get("decision_reasons") or [])]
+                )),
+                "summary": f"三单匹配待复核（HOLD_REVIEW）：{reason}",
+            }
+        )
+        result["match_result"] = match_result
+        result["decision"] = "HOLD_REVIEW"
+        result["hold_reason_code"] = "PAPER_FIELD"
+        result["decision_reasons"] = match_result["decision_reasons"]
+    return result
+
+
 def run_three_way(
     classified: list[dict[str, Any]],
     manual: Optional[dict[str, Any]] = None,
@@ -889,11 +1360,30 @@ def run_three_way(
     period_end: Optional[str] = None,
     calendar_mode: Optional[str] = None,
     fiscal_year_start: Optional[str] = None,
+    complete_set: bool = False,
+    business_group_id: Optional[str] = None,
+    business_binding_confirmed: bool = False,
 ) -> dict[str, Any]:
     from src.three_way_match.matcher import ThreeWayMatcher
+    from src.three_way_match.one_to_many import run_one_to_many
 
     manual = manual or {}
-    merged = merge_same_type_docs(classified)
+    # 入账日来自序时账匹配结果，权威性高于 OCR 猜测。只在单据字段缺失时补入，
+    # 且复制输入，避免测试流程反向污染原始识别结果。
+    prepared_classified: list[dict[str, Any]] = []
+    for source in classified:
+        item = dict(source)
+        fields = dict(source.get("fields") or {})
+        if source.get("doc_type") == "invoice" and not fields.get("postingDate"):
+            ledger_posting_date = source.get("ledger_posting_date")
+            if ledger_posting_date:
+                fields["postingDate"] = ledger_posting_date
+        item["fields"] = fields
+        prepared_classified.append(item)
+    classified = prepared_classified
+    contract_anchor = _contract_order_anchor(classified)
+    working_classified = [*classified, contract_anchor] if contract_anchor else classified
+    merged = merge_same_type_docs(working_classified)
     work_merged = dict(merged)
 
     missing_roles: list[str] = []
@@ -985,14 +1475,46 @@ def run_three_way(
         }
 
     if selected_receipt_idx is None:
-        selected_receipt_idx = find_latest_receipt_index(classified)
+        selected_receipt_idx = find_latest_receipt_index(working_classified)
 
     request = assemble_three_way_request(
         work_merged,
         selected_receipt_idx=selected_receipt_idx,
-        classified=classified,
+        classified=working_classified,
         manual=manual,
     )
+
+    fulfillment = run_one_to_many(
+        working_classified,
+        complete_set=complete_set,
+        business_group_id=_explicit_group_filter(working_classified, business_group_id),
+    )
+    quantity_roles = dict(fulfillment.get("quantity_roles") or {})
+    amount_roles = dict(fulfillment.get("amount_roles") or {})
+    has_fulfillment_rows = bool(fulfillment.get("rows"))
+    order_updates: dict[str, Any] = {}
+    receipt_updates: dict[str, Any] = {}
+    invoice_updates: dict[str, Any] = {}
+    if has_fulfillment_rows and quantity_roles:
+        order_updates["quantity"] = float(quantity_roles.get("ordered_qty") or 0)
+        receipt_updates["quantity"] = float(quantity_roles.get("received_qty") or 0)
+        invoice_updates["quantity"] = float(quantity_roles.get("invoiced_qty") or 0)
+    if has_fulfillment_rows and float(amount_roles.get("ordered_amount") or 0) > 0:
+        order_updates["total_amount"] = float(amount_roles["ordered_amount"])
+    if has_fulfillment_rows and float(amount_roles.get("received_amount") or 0) > 0:
+        receipt_updates["total_amount"] = float(amount_roles["received_amount"])
+    if has_fulfillment_rows and float(amount_roles.get("invoiced_amount") or 0) > 0:
+        invoice_updates["total_amount"] = float(amount_roles["invoiced_amount"])
+    if order_updates or receipt_updates or invoice_updates:
+        request = request.model_copy(
+            update={
+                "order": request.order.model_copy(update=order_updates),
+                "warehouse_receipt": request.warehouse_receipt.model_copy(
+                    update=receipt_updates
+                ),
+                "invoice": request.invoice.model_copy(update=invoice_updates),
+            }
+        )
 
     # 贸易模式：外销截止日用装船/交承运人日，禁止仓库签收冒充 FOB/CIF 控制权日
     tm_payload: dict[str, Any] = {}
@@ -1028,11 +1550,31 @@ def run_three_way(
         fiscal_year_start=fiscal_year_start,
     )
     result = serialize_three_way_result(raw)
+    result["fulfillment"] = fulfillment
+    result = _apply_fulfillment_decision(result, fulfillment)
+    if contract_anchor:
+        result["anchor_source"] = "CONTRACT_AS_ORDER_ANCHOR"
+        result["fulfillment"]["anchor_source"] = "CONTRACT_AS_ORDER_ANCHOR"
+    result = _apply_per_invoice_checks(
+        result,
+        classified,
+        request,
+        matcher,
+        period_end=period_end,
+        calendar_mode=calendar_mode,
+        fiscal_year_start=fiscal_year_start,
+    )
     from src.three_way_match.audit_trace import build_three_way_audit_view
 
     # 三单的业务分组、字段勾稽与截止性是三个不同的审计判断层，
     # 为兼容旧调用仍保留 overall_status，但新消费者不得再拿它当三单结论。
-    result.update(build_three_way_audit_view(classified, result))
+    result.update(
+        build_three_way_audit_view(
+            classified,
+            result,
+            business_binding_confirmed=business_binding_confirmed,
+        )
+    )
     if tm_payload:
         result["trading_mode"] = tm_payload.get("workbook_view") or {}
         result["trading_mode_gospd"] = tm_payload.get("gospd_cells") or {}

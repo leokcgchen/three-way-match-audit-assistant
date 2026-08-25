@@ -68,6 +68,39 @@ def _weak_profile(docs: list[dict[str, Any]]) -> dict[str, list[str]]:
     return dict(result)
 
 
+def group_documents_by_business(
+    classified: list[dict[str, Any]],
+    *,
+    allow_weak_unique_attach: bool = True,
+    allow_unique_so_ht_merge: bool = True,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """人工业务框优先；其余单据继续使用既有强主键分组规则。"""
+
+    manual: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    canonical: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    automatic: list[dict[str, Any]] = []
+    for doc in list(classified or []):
+        group_id = _text(doc.get("business_group_id"))
+        if group_id:
+            manual[group_id].append(doc)
+        elif _text(doc.get("sample_business_id")):
+            canonical[_text(doc.get("sample_business_id"))].append(doc)
+        else:
+            automatic.append(doc)
+    grouped = [(group_id, group_docs) for group_id, group_docs in manual.items()]
+    grouped.extend(
+        (group_id, group_docs) for group_id, group_docs in canonical.items()
+    )
+    grouped.extend(
+        group_classified_by_chain(
+            automatic,
+            allow_weak_unique_attach=allow_weak_unique_attach,
+            allow_unique_so_ht_merge=allow_unique_so_ht_merge,
+        )
+    )
+    return grouped
+
+
 def build_business_groups(classified: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build display-ready BusinessGroup objects from OCR-extracted documents.
 
@@ -77,19 +110,16 @@ def build_business_groups(classified: list[dict[str, Any]]) -> list[dict[str, An
     weak features are explanatory only and do not silently merge groups.
     """
     docs = list(classified or [])
-    manual: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    automatic: list[dict[str, Any]] = []
-    for doc in docs:
-        group_id = _text(doc.get("business_group_id"))
-        if group_id:
-            manual[group_id].append(doc)
-        else:
-            automatic.append(doc)
-
     buckets: list[tuple[str, list[dict[str, Any]], bool]] = []
-    for group_id, group_docs in manual.items():
-        buckets.append((group_id, group_docs, True))
-    buckets.extend((group_id, group_docs, False) for group_id, group_docs in group_classified_by_chain(automatic, allow_weak_unique_attach=False, allow_unique_so_ht_merge=True))
+    for group_id, group_docs in group_documents_by_business(
+        docs,
+        allow_weak_unique_attach=False,
+        allow_unique_so_ht_merge=True,
+    ):
+        manual_override = any(
+            _text(doc.get("business_group_id")) == group_id for doc in group_docs
+        )
+        buckets.append((group_id, group_docs, manual_override))
 
     out: list[dict[str, Any]] = []
     for group_id, group_docs, manual_override in buckets:

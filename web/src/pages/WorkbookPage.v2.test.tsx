@@ -33,4 +33,23 @@ describe('WorkbookPage V2', () => {
     expect(screen.queryByRole('button', { name: '生成并下载底稿' })).not.toBeInTheDocument()
     expect(document.querySelectorAll('.btn.primary')).toHaveLength(1)
   })
+
+  it('uses complete status explanations in export readiness', async () => {
+    exportReadiness.mockResolvedValue({
+      schema_version: '1.2', ready: true, summary: '可以导出', blocked_count: 0,
+      stages: [],
+      lights: {
+        green: 1, yellow: 1, red: 1, wait: 1,
+        progress: { done: 1, docs_missing: 1, fields_missing: 1, match_exception: 1, await_human: 1 },
+      },
+    })
+    render(<WorkbookPage job={job} onJob={vi.fn()} onGo={vi.fn()} />)
+
+    expect(await screen.findByText(/绿色：可以继续或已经通过/)).toBeInTheDocument()
+    expect(screen.getByText(/黄色：需要审计师人工判断/)).toBeInTheDocument()
+    expect(screen.getByText(/缺少凭证资料/)).toBeInTheDocument()
+    expect(screen.getByText(/缺少关键字段/)).toBeInTheDocument()
+    expect(screen.getByText(/等待人工判断/)).toBeInTheDocument()
+    expect(screen.queryByText(/黄人裁|待人裁|资料缺|字段缺/)).not.toBeInTheDocument()
+  })
 })

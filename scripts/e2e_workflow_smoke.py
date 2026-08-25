@@ -31,7 +31,7 @@ def main() -> None:
         {"goal_ids": ["gospd01010"]},
     )
     print("steps", job["plan"]["required_steps"])
-    job = call("POST", f"/api/v1/workflow/jobs/{jid}/seed-demo")
+    raise RuntimeError("演示注入入口已移除；请改用 scripts/accept_gospd01030_ocr_e2e.py 的真实文件上传流程。")
     print("docs", len(job["classified"]))
     # 高亮 / 原件链路
     import urllib.parse

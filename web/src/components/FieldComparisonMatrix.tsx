@@ -50,7 +50,7 @@ export function FieldComparisonMatrix({
   const overlaySig = JSON.stringify(draftOverlay || {})
   const reqSig = JSON.stringify(requiredRows || [])
   const jobRev = job.updated_at || job.fields_confirm_sig || job.job_id
-  const { columns, rows } = useMemo(
+  const { columns, rows, timing } = useMemo(
     () => buildFieldComparison(job, chainFileNames, draftOverlay, requiredRows),
     [job, jobRev, chainFileNames, overlaySig, refreshKey, reqSig],
   )
@@ -120,8 +120,12 @@ export function FieldComparisonMatrix({
   return (
     <div className="compare-matrix">
       <div className="compare-legend hint">
-        绿勾=单据间取值一致（≠已在原件定位成功）。点单元格→右侧高亮；对不上时可能是
-        LLM 归一/推断值，请改对或手改。账列来自工作台上传的抽样清单。
+        全部已提取字段在本表横向展开。绿勾=本应一致的字段在适用单据间取值一致（≠已在原件定位成功）；
+        各单据自身编号、日期和专有信息仅展示，不做跨单据相等判断。关联订单号参与串联核对。
+        点单元格→右侧高亮；账列来自工作台上传的抽样清单。
+        <span className={`badge ${timing.status === 'PASS' ? '' : 'warn'} ml-8`} data-tip={timing.summary}>
+          时序 {timing.status === 'PASS' ? '通过' : timing.status === 'REVIEW' ? '待复核' : '异常'}
+        </span>
         {mismatchCount > 0 && (
           <span className="badge warn ml-8">待核 {mismatchCount} 行</span>
         )}
@@ -162,6 +166,7 @@ export function FieldComparisonMatrix({
                       {row.label}
                     </span>
                     {twBad ? <span className="badge warn ml-4">三单</span> : null}
+                    {row.manualReviewOnly ? <span className="badge ml-4">人工核对</span> : null}
                     {row.quantityRolesHint ? (
                       <div className="hint cmp-qty-roles">{row.quantityRolesHint}</div>
                     ) : null}
@@ -188,7 +193,7 @@ export function FieldComparisonMatrix({
                         >
                           {empty ? '—' : val}
                           {isDraft ? <span className="badge warn ml-4">未存</span> : null}
-                          {!empty && row.match && !isDraft && <span className="cmp-ok"> ✓</span>}
+                          {!empty && row.match && !row.manualReviewOnly && !isDraft && <span className="cmp-ok"> ✓</span>}
                         </button>
                       </td>
                     )

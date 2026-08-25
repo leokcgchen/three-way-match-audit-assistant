@@ -235,6 +235,8 @@ def _collect_bundle_findings(
         ]
         three_extra: list[str] = []
         cutoff_extra: list[str] = []
+        chronology = three_way.get("date_chronology") if isinstance(three_way.get("date_chronology"), dict) else {}
+        chronology_status = str(chronology.get("status") or "")
         try:
             from src.audit.gospd01030_assertions import build_gospd01030_assertions
 
@@ -257,6 +259,28 @@ def _collect_bundle_findings(
             logger.exception(
                 "build_gospd01030_assertions failed during conclusion_trace chain=%s",
                 chain_id,
+            )
+        if chronology_status:
+            chronology_fid = f"chronology:{chain_key}"
+            findings.append(
+                {
+                    "finding_id": chronology_fid,
+                    "chain_id": chain_id,
+                    "step": "three_way_cutoff",
+                    "module": "date_chronology",
+                    "step_label": "单据时序",
+                    "title": f"单据时序{chain_tag} · {chronology_status}",
+                    "status": chronology_status,
+                    "blocking": _status_bad(chronology_status),
+                    "method": str(chronology.get("rule") or "合同日≤订单日≤签收/验收日≤发票日。"),
+                    "summary": str(chronology.get("summary") or ""),
+                    "fields_used": [],
+                    "comparisons": list(chronology.get("inversions") or []),
+                    "go_field_confirm": True,
+                    "retest_path": "three-way-cutoff",
+                    "acknowledged": bool((acks.get(chronology_fid) or {}).get("genuine")),
+                    "ack_reason": (acks.get(chronology_fid) or {}).get("reason"),
+                }
             )
         fid = f"three_way:{chain_key}:overall"
         findings.append(
@@ -318,6 +342,7 @@ def _collect_bundle_findings(
                 or match.get("slot_reasons")
                 or {},
                 "erp_review": three_way.get("erp_review") or match.get("erp_review") or {},
+                "fulfillment": three_way.get("fulfillment") or match.get("fulfillment") or {},
                 "go_field_confirm": True,
                 "retest_path": "three-way-cutoff",
                 "acknowledged": bool((acks.get(fid) or {}).get("genuine")),

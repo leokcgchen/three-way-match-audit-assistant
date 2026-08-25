@@ -152,6 +152,11 @@ def accept_field(
     fields = dict(item.get("fields") or {})
     fields[key] = value
     item["fields"] = fields
+    # Keep evidence location and accepted normalization synchronized without
+    # changing the immutable raw value held in the field slot.
+    from src.workflow.field_resolution.evidence_inventory import attach_document_evidence
+
+    attach_document_evidence(item, changed_keys={key})
     return before
 
 

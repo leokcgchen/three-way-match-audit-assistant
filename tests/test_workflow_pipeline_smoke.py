@@ -1,4 +1,4 @@
-"""工作台 pipeline 冒烟：plan → job → seed → confirm fields。"""
+"""工作台 pipeline 冒烟：plan → job → controlled fixture → confirm fields。"""
 
 from __future__ import annotations
 
@@ -20,15 +20,26 @@ def test_resolve_plan_and_confirm_fields_path():
     job = JOB_STORE.set_goals(job_id, ["gospd01010"])
     assert "evidence_match" in job["plan"]["required_steps"]
 
-    client = TestClient(app)
-    r = client.post(f"/api/v1/workflow/jobs/{job_id}/seed-demo")
-    assert r.status_code == 200
-    body = r.json()
+    from src.models.field_values import seed_field_meta
+
+    docs = [
+        {"file_name": "controlled_contract.pdf", "path": "", "doc_type": "contract", "fields": {"contractNo": "HT-001", "orderNo": "SO-001", "totalAmount": 1000}},
+        {"file_name": "controlled_order.pdf", "path": "", "doc_type": "order", "fields": {"documentNo": "SO-001", "orderNo": "SO-001", "totalAmount": 1000, "quantity": 1}},
+        {"file_name": "controlled_invoice.pdf", "path": "", "doc_type": "invoice", "fields": {"invoiceNo": "INV-001", "orderNo": "SO-001", "totalAmount": 1000}},
+        {"file_name": "controlled_delivery.pdf", "path": "", "doc_type": "delivery", "fields": {"documentNo": "DEL-001", "orderNo": "SO-001", "deliveryDate": "2025-01-02"}},
+        {"file_name": "controlled_receipt.pdf", "path": "", "doc_type": "receipt", "fields": {"documentNo": "REC-001", "orderNo": "SO-001", "acceptanceDate": "2025-01-03"}},
+    ]
+    for doc in docs:
+        doc["ocr_source"] = "controlled_test_fixture"
+        seed_field_meta(doc, source="controlled_test_fixture", extractor="test")
+    body = JOB_STORE.update(job_id, classified=docs)
     assert len(body.get("classified") or []) >= 1
     assert body.get("fields_confirmed") is False
 
+    client = TestClient(app)
+    assert client.post(f"/api/v1/workflow/jobs/{job_id}/seed-demo").status_code == 404
     r2 = client.post(f"/api/v1/workflow/jobs/{job_id}/hitl/fields/confirm")
-    assert r2.status_code == 200
+    assert r2.status_code == 200, r2.text
     confirmed = r2.json()
     assert confirmed.get("fields_confirmed") is True
     assert confirmed.get("fields_confirm_sig")

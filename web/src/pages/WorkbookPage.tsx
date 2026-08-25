@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, type ExportReadiness, type WorkbookPreview } from '../api'
 import type { Job } from '../types'
 import { ChainPicker } from '../components/ChainPicker'
-import { DESK_LIGHT_LEGEND_TIP } from '../lib/deskLights'
+import { DESK_LIGHT_LEGEND_INLINE, DESK_LIGHT_LEGEND_TIP } from '../lib/deskLights'
 
 type Props = { job: Job; onJob: (j: Job) => void; onGo: (step: string) => void }
 
@@ -145,16 +145,16 @@ export function WorkbookPage({ job, onJob, onGo }: Props) {
               <span className="desk-light-chip is-green">绿 {readiness.lights.green}</span>
               <span className="desk-light-chip is-yellow">黄 {readiness.lights.yellow}</span>
               <span className="desk-light-chip is-red">红 {readiness.lights.red}</span>
-              <span className="desk-light-chip is-wait">待办 {readiness.lights.wait}</span>
-              <span className="desk-light-legend hint">绿可继续 · 黄人裁 · 红须处理</span>
+              <span className="desk-light-chip is-wait">尚未判断 {readiness.lights.wait}</span>
+              <span className="desk-light-legend hint">{DESK_LIGHT_LEGEND_INLINE}</span>
             </div>
           )}
           {readiness?.lights?.progress && (
             <p className="hint export-progress-line">
-              已完成 {readiness.lights.progress.done ?? 0} · 资料缺{' '}
-              {readiness.lights.progress.docs_missing ?? 0} · 字段缺{' '}
-              {readiness.lights.progress.fields_missing ?? 0} · 异常{' '}
-              {readiness.lights.progress.match_exception ?? 0} · 待人裁{' '}
+              已完成 {readiness.lights.progress.done ?? 0} · 缺少凭证资料{' '}
+              {readiness.lights.progress.docs_missing ?? 0} · 缺少关键字段{' '}
+              {readiness.lights.progress.fields_missing ?? 0} · 匹配或测试异常{' '}
+              {readiness.lights.progress.match_exception ?? 0} · 等待人工判断{' '}
               {readiness.lights.progress.await_human ?? 0}
             </p>
           )}

@@ -13,7 +13,7 @@ export function EventSummaryBar({ summary, busy = false, onPrimary }: Props) {
       <div className="event-summary-metrics">
         <strong>待处理 {summary.open}</strong>
         <span className={summary.blocking > 0 ? 'is-blocking' : ''}>阻断 {summary.blocking}</span>
-        <span>缺件 {summary.missing}</span>
+        <span>缺少凭证资料 {summary.missing}</span>
         <span>人工判断 {summary.review}</span>
         <span>自动通过 {summary.passed}</span>
       </div>

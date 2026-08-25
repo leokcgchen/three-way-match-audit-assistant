@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.legacy_ocr import LegacyOcrAdapter
+from src.legacy_ocr.ocr_adapter import _extract_pdf_text_evidence
 
 
 def test_recognize_document_prefers_pdf_text_layer(tmp_path: Path, monkeypatch):
@@ -56,3 +57,22 @@ def test_thin_pdf_text_still_tries_paddle(tmp_path: Path, monkeypatch):
     )
     out = adapter.recognize_document(str(pdf), "invoice")
     assert out["source"] == "paddleocr"
+
+
+def test_native_pdf_shortcut_returns_positioned_words():
+    pdf = Path(__file__).parent / "fixtures" / "one_to_many" / "PO_SO001.pdf"
+
+    text, blocks = _extract_pdf_text_evidence(str(pdf))
+
+    assert "SO001" in text
+    order_number = next(block for block in blocks if block["text"] == "SO001")
+    assert order_number["source"] == "native_pdf_word"
+    assert order_number["page"] == 0
+    assert len(order_number["bbox"]) == 4
+    assert text[order_number["char_start"] : order_number["char_end"]] == "SO001"
+
+    out = LegacyOcrAdapter(use_mock_when_unavailable=False).recognize_document(
+        str(pdf), "purchase_order"
+    )
+    assert out["source"] == "pdf_text"
+    assert any(block.get("bbox") for block in out["textBlocks"])

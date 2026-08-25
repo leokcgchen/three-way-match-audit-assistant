@@ -333,11 +333,11 @@ def pick_receipt_date_from_fields(fields: Optional[Dict[str, Any]]) -> Optional[
     if not fields:
         return None
     for key in (
-        "receiptDateForCutoff",
         "acceptanceDate",
+        "documentDate",
+        "receiptDateForCutoff",
         "receiptDate",
         "deliveryDate",
-        "documentDate",
     ):
         val = fields.get(key)
         if val is None:

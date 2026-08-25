@@ -34,6 +34,9 @@ DOC_TYPE_ALIASES = {
     "contract": "contract",
     "agreement": "contract",
     "ht": "contract",
+    "transport_document": "transport_document",
+    "bill_of_lading": "transport_document",
+    "bol": "transport_document",
 }
 
 
@@ -42,26 +45,65 @@ def _normalize_doc_type(document_type: str) -> str:
     return DOC_TYPE_ALIASES.get(key, key or "other")
 
 
-def _extract_pdf_text_layer(file_path: str) -> str:
-    """从 PDF 内嵌文字层抽取文本（不依赖 OCR）。扫描件无文字层时返回空串。"""
+def _extract_pdf_text_evidence(file_path: str) -> tuple[str, List[Dict[str, Any]]]:
+    """提取 PDF 文字层及逐词位置，供字段证据定位使用。"""
     path = Path(file_path)
     if path.suffix.lower() != ".pdf":
-        return ""
+        return "", []
     try:
         import pdfplumber
     except ImportError:
-        return ""
+        return "", []
     try:
         parts: List[str] = []
+        blocks: List[Dict[str, Any]] = []
+        text_length = 0
         with pdfplumber.open(path) as doc:
-            for page in doc.pages:
-                t = page.extract_text() or ""
-                if t.strip():
-                    parts.append(t.strip())
-        return "\n".join(parts).strip()
+            for page_index, page in enumerate(doc.pages):
+                page_text = (page.extract_text() or "").strip()
+                if not page_text:
+                    continue
+                if parts:
+                    text_length += 1
+                page_start = text_length
+                parts.append(page_text)
+                text_length += len(page_text)
+                cursor = 0
+                for word in page.extract_words() or []:
+                    value = str(word.get("text") or "").strip()
+                    if not value:
+                        continue
+                    relative_start = page_text.find(value, cursor)
+                    if relative_start < 0:
+                        relative_start = page_text.find(value)
+                    if relative_start < 0:
+                        continue
+                    cursor = relative_start + len(value)
+                    blocks.append(
+                        {
+                            "text": value,
+                            "page": page_index,
+                            "bbox": [
+                                float(word.get("x0") or 0.0),
+                                float(word.get("top") or 0.0),
+                                float(word.get("x1") or 0.0),
+                                float(word.get("bottom") or 0.0),
+                            ],
+                            "char_start": page_start + relative_start,
+                            "char_end": page_start + relative_start + len(value),
+                            "source": "native_pdf_word",
+                        }
+                    )
+        return "\n".join(parts).strip(), blocks
     except Exception as exc:  # noqa: BLE001
         logger.warning("PDF 文字层抽取失败 path={} err={}", file_path, exc)
-        return ""
+        return "", []
+
+
+def _extract_pdf_text_layer(file_path: str) -> str:
+    """兼容旧调用：只返回 PDF 内嵌文字。"""
+    text, _ = _extract_pdf_text_evidence(file_path)
+    return text
 
 
 # 各单据「语义关键字段」：缺了就触发 LLM 补抽（不靠堆正则认新表述）
@@ -98,6 +140,27 @@ _PRESERVE_AI_KEYS = {
     "transportTerms",
     "controlTransferTerms",
     "performanceObligations",
+}
+
+_GROUNDED_TARGET_FIELDS: Dict[str, tuple[str, ...]] = {
+    "contract": (
+        "sellerName", "sellerAddress", "sellerTaxId", "buyerName", "buyerAddress", "buyerTaxId",
+        "goodsName", "model", "quantity", "unit", "unitPriceGross", "totalAmount", "plannedDeliveryDate", "items",
+    ),
+    "purchase_order": (
+        "customerCode", "sellerName", "sellerAddress", "sellerTaxId", "buyerName", "buyerAddress", "buyerTaxId",
+        "goodsName", "model", "quantity", "unit", "unitPriceGross", "totalAmount", "plannedDeliveryDate", "items",
+    ),
+    "warehouse_receipt": (
+        "receiptNo", "orderNo", "customerCode", "sellerName", "sellerAddress", "buyerName", "buyerAddress",
+        "goodsName", "model", "itemCode", "batchNo", "quantity", "unit", "unitPriceGross", "totalAmount",
+        "arrivalDateTime", "acceptanceDateTime", "items",
+    ),
+    "invoice": (
+        "invoiceCode", "invoiceNo", "orderNo", "sellerName", "sellerAddress", "sellerTaxId",
+        "buyerName", "buyerAddress", "buyerTaxId", "goodsName", "model", "quantity", "unit",
+        "unitPrice", "unitPriceNet", "amount", "taxRate", "taxAmount", "totalAmount", "invoiceDateTime", "items",
+    ),
 }
 
 
@@ -464,6 +527,248 @@ def extract_table_anchored_fields(ocr_text: str, document_type: str) -> Dict[str
     kind = _normalize_doc_type(document_type)
     result: Dict[str, Any] = {}
 
+    def clean_number(raw: str) -> str:
+        return str(raw or "").replace(",", "").replace("¥", "").replace("￥", "").strip()
+
+    def iso_date(raw: str) -> str:
+        match = re.search(r"(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})", str(raw or ""))
+        if not match:
+            return str(raw or "").strip()
+        return f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+
+    def english_date(raw: str) -> str:
+        value = str(raw or "").strip()
+        for pattern in ("%d %B %Y", "%d %b %Y"):
+            try:
+                from datetime import datetime
+
+                return datetime.strptime(value, pattern).date().isoformat()
+            except ValueError:
+                continue
+        return ""
+
+    def first_value(pattern: str, flags: int = re.I) -> str:
+        match = re.search(pattern, text, flags=flags)
+        if not match:
+            return ""
+        return next((str(group).strip() for group in match.groups() if group and str(group).strip()), "")
+
+    def set_parties(seller: str = "", buyer: str = "") -> None:
+        if seller:
+            result["sellerName"] = seller
+            result["supplierName"] = seller
+        if buyer:
+            result["buyerName"] = buyer
+
+    def clean_address(raw: str) -> str:
+        value = str(raw or "").strip()
+        street = re.match(r"(.{2,80}?号)(?:\s|$)", value)
+        return street.group(1).strip() if street else value
+
+    def line_matches(pattern: str, flags: int = re.I) -> List[re.Match[str]]:
+        matches: List[re.Match[str]] = []
+        for raw_line in text.splitlines():
+            match = re.match(pattern, raw_line.strip(), flags=flags)
+            if match:
+                matches.append(match)
+        return matches
+
+    def set_primary_item(items: List[Dict[str, Any]], aliases: Dict[str, str]) -> None:
+        if not items:
+            return
+        result["items"] = items
+        for target, source in aliases.items():
+            value = items[0].get(source)
+            if value not in (None, ""):
+                result[target] = value
+
+    # 单据身份：自身编号和关联编号必须分槽保存。
+    if kind == "contract":
+        own_no = first_value(r"(?:合同编号|Contract\s+No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})")
+        doc_date = first_value(r"(?:签订日期|合同日期)\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+        doc_date_en = first_value(r"Contract\s+Date\s*[:：]?\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})")
+        if own_no:
+            result.update({"contractNo": own_no, "documentNo": own_no})
+        if doc_date:
+            result["documentDate"] = iso_date(doc_date)
+        elif doc_date_en:
+            result["documentDate"] = english_date(doc_date_en)
+    elif kind == "purchase_order":
+        own_no = first_value(r"(?:订单编号|销售订单号|订单号|Order\s+No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})")
+        doc_date = first_value(r"订单日期\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+        doc_date_en = first_value(r"Order\s+Date\s*[:：]?\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})")
+        contract_no = first_value(r"(?:Related\s+)?S/C\s+No\.\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})")
+        if own_no:
+            result.update({"orderNo": own_no, "documentNo": own_no})
+        if doc_date:
+            result["documentDate"] = iso_date(doc_date)
+        elif doc_date_en:
+            result["documentDate"] = english_date(doc_date_en)
+        if contract_no:
+            result["contractNo"] = contract_no
+    elif kind == "warehouse_receipt":
+        own_no = first_value(
+            r"(?:验收单号|签收单号|收货单号|入库单号|Certificate\s+No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})"
+        )
+        order_no = first_value(r"(?:关联订单号|销售订单号|订单号|Order\s+No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})")
+        doc_date = first_value(r"(?:编制日期|单据日期)\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+        if own_no:
+            result["documentNo"] = own_no
+            result["receiptNo"] = own_no
+        if order_no:
+            result["orderNo"] = order_no
+        if doc_date:
+            result["documentDate"] = iso_date(doc_date)
+    elif kind == "invoice":
+        header_ids = re.search(
+            r"Invoice\s+No\.\s+S/C\s+No\.\s+Trade\s+Term\s*\n\s*"
+            r"([A-Za-z0-9][A-Za-z0-9_-]{3,})\s+([A-Za-z0-9][A-Za-z0-9_-]{3,})",
+            text,
+            flags=re.I,
+        )
+        own_no = first_value(
+            r"(?:发票号码|发票号|(?:^|\n)\s*(?:Invoice\s+)?No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})",
+            re.I,
+        )
+        if header_ids:
+            own_no = header_ids.group(1)
+        invoice_code = first_value(r"发票代码\s*[:：]?\s*([0-9]{8,20})")
+        order_no = first_value(r"(?:对应销售订单|关联订单号|销售订单号|Order\s+No\.?)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,})")
+        contract_no = header_ids.group(2) if header_ids else first_value(
+            r"(?:S/C|Contract)\s+No\.?\s*[:：]?\s*(?!Trade\b)([A-Za-z0-9][A-Za-z0-9_-]{3,})"
+        )
+        doc_date = first_value(r"(?:开票日期|发票日期|Invoice\s+Date)\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+        invoice_time = first_value(r"开票时间\s*[:：]?\s*(\d{1,2}:\d{2})")
+        if own_no:
+            result.update({"invoiceNo": own_no, "documentNo": own_no})
+        if invoice_code:
+            result["invoiceCode"] = invoice_code
+        if order_no:
+            result["orderNo"] = order_no
+        if contract_no:
+            result["contractNo"] = contract_no
+        if doc_date:
+            result["documentDate"] = iso_date(doc_date)
+            if invoice_time:
+                result["invoiceDateTime"] = f"{iso_date(doc_date)}T{invoice_time}"
+
+    if kind == "transport_document":
+        bol_header = re.search(
+            r"Booking\s+No\.\s+B/L\s+No\.\s+Issue\s+Date(?:\s+and\s+Time)?\s*\n\s*"
+            r"\S+\s+([A-Za-z0-9][A-Za-z0-9_-]{3,})\s+(\d{4}[./-]\d{1,2}[./-]\d{1,2})",
+            text,
+            flags=re.I,
+        )
+        own_no = bol_header.group(1) if bol_header else first_value(
+            r"(?:B/L|Bill\s+of\s+Lading)\s+No\.?\s*[:：]?\s*(?!Issue\b)([A-Za-z0-9][A-Za-z0-9_-]{3,})"
+        )
+        doc_date = first_value(r"(?:Issue\s+Date|Date\s+of\s+Issue)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})")
+        if bol_header:
+            doc_date = bol_header.group(2)
+        if own_no:
+            result.update({"documentNo": own_no, "billOfLadingNo": own_no})
+        if doc_date:
+            result["documentDate"] = iso_date(doc_date)
+
+    customer_code = first_value(r"客户编码\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})")
+    if customer_code:
+        result["customerCode"] = customer_code
+
+    planned = first_value(r"(?:计划交期|约定交付日期)\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+    if not planned:
+        planned = first_value(r"约定交付计划[\s\S]{0,120}?(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)")
+    if planned:
+        result["plannedDeliveryDate"] = iso_date(planned)
+
+    arrival = re.search(r"到货时间\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)\s*(\d{1,2}:\d{2})?", text)
+    accepted = re.search(r"验收完成\s*[:：]?\s*(\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?)\s*(\d{1,2}:\d{2})?", text)
+    if arrival:
+        arrival_date = iso_date(arrival.group(1))
+        result["deliveryDate"] = arrival_date
+        result["arrivalDateTime"] = f"{arrival_date}T{arrival.group(2)}" if arrival.group(2) else arrival_date
+    if accepted:
+        acceptance_date = iso_date(accepted.group(1))
+        result["acceptanceDate"] = acceptance_date
+        result["acceptanceDateTime"] = f"{acceptance_date}T{accepted.group(2)}" if accepted.group(2) else acceptance_date
+
+    # 两列表头的主体、地址、税号：合同/订单为卖方在前；发票为购方在前。
+    names = re.findall(r"名\s*称\s*[:：]\s*([^\n]{2,50}?(?:有限责任公司|股份有限公司|有限公司|公司))", text)
+    addresses = re.findall(r"地\s*址\s*[:：]\s*([^\n]+?)(?=\s+地\s*址\s*[:：]|\n|$)", text)
+    tax_ids = re.findall(r"(?:统一社会信用代码|纳税人识别号)\s*[:：]\s*([A-Z0-9]{12,24})", text, flags=re.I)
+    if len(names) >= 2:
+        if kind == "invoice":
+            set_parties(names[1].strip(), names[0].strip())
+        else:
+            set_parties(names[0].strip(), names[1].strip())
+    if len(addresses) >= 2:
+        if kind == "invoice":
+            result["buyerAddress"], result["sellerAddress"] = clean_address(addresses[0]), clean_address(addresses[1])
+        else:
+            result["sellerAddress"], result["buyerAddress"] = clean_address(addresses[0]), clean_address(addresses[1])
+    if len(tax_ids) >= 2:
+        if kind == "invoice":
+            result["buyerTaxId"], result["sellerTaxId"] = tax_ids[0], tax_ids[1]
+        else:
+            result["sellerTaxId"], result["buyerTaxId"] = tax_ids[0], tax_ids[1]
+
+    if kind == "warehouse_receipt":
+        seller = first_value(r"供货方\s+(?:联系人\s+\S+\s+)?([^\n]{2,50}?(?:有限公司|公司))")
+        buyer = first_value(r"收货方\s+(?:联系人\s+\S+\s+)?([^\n]{2,50}?(?:有限公司|公司))")
+        seller = seller or first_value(r"([^\n]{2,50}?(?:有限公司|公司))\s*\n供货方(?:\s|$)")
+        buyer = buyer or first_value(r"([^\n]{2,50}?(?:有限公司|公司))\s*\n收货方(?:\s|$)")
+        set_parties(seller, buyer)
+        seller_address = first_value(r"供货方[^\n]*\n([^\n]{4,80})")
+        buyer_address = first_value(r"收货方[^\n]*\n([^\n]{4,80})")
+        if seller_address and not seller_address.endswith("公司"):
+            result["sellerAddress"] = seller_address
+        if buyer_address and not buyer_address.endswith("公司"):
+            result["buyerAddress"] = buyer_address
+
+    if kind in {"invoice", "warehouse_receipt", "contract", "purchase_order", "transport_document"}:
+        english_seller = first_value(
+            r"(?:^|\n)\s*(?:Seller|Supplier|Shipper)\s*[:：]\s*([^\n]{2,100})",
+            re.I,
+        )
+        english_buyer = first_value(
+            r"(?:^|\n)\s*(?:Buyer|Consignee)\s*[:：]\s*([^\n]{2,100})",
+            re.I,
+        )
+        paired_companies = re.search(
+            r"(?:Seller\s+Consignee|Shipper\s+Consignee(?:\s+Notify\s+Party)?)\s*\n\s*"
+            r"(.+?Co\.,\s*Ltd\.)\s+(.+?GmbH)(?:\s+.+?GmbH)?\s*(?:\n|$)",
+            text,
+            flags=re.I,
+        )
+        interleaved = re.search(
+            r"SELLER\s*\n\s*Name:\s*(.+?Co\.,)\s+BUYER\s*\n\s*Ltd\.\s+Name:\s*([^\n]+)",
+            text,
+            flags=re.I,
+        )
+        receipt_seller = first_value(r"([^\n]+?Co\.,\s*Ltd\.)\s*\n\s*Seller\s+Contact", re.I)
+        receipt_buyer = first_value(r"([^\n]+?GmbH)\s*\n\s*Buyer\s+Authorized", re.I)
+        if paired_companies:
+            english_seller, english_buyer = paired_companies.group(1).strip(), paired_companies.group(2).strip()
+        elif interleaved:
+            english_seller = interleaved.group(1).strip() + " Ltd."
+            english_buyer = interleaved.group(2).strip()
+        elif receipt_seller or receipt_buyer:
+            english_seller = receipt_seller or english_seller
+            english_buyer = receipt_buyer or english_buyer
+        set_parties(english_seller, english_buyer)
+
+    if kind == "warehouse_receipt":
+        accepted_en = re.search(
+            r"Receipt\s+and\s+Acceptance\s+Time\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})\s*(\d{1,2}:\d{2})?",
+            text,
+            flags=re.I,
+        )
+        if accepted_en:
+            acceptance_date = iso_date(accepted_en.group(1))
+            result["acceptanceDate"] = acceptance_date
+            result["acceptanceDateTime"] = (
+                f"{acceptance_date}T{accepted_en.group(2)}" if accepted_en.group(2) else acceptance_date
+            )
+
     if kind == "invoice":
         gross = re.search(
             r"价\s*税\s*合\s*计[^¥￥\d]{0,80}[（(]?\s*小写[）)]?\s*[¥￥]\s*([\d,]+(?:\.\d{1,2})?)",
@@ -489,6 +794,138 @@ def extract_table_anchored_fields(ocr_text: str, document_type: str) -> Dict[str
                 }
             )
 
+        invoice_line = re.search(
+            r"(?:\*[^*\n]+\*\s*)?(?:(?P<goods>[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9（）()·\-]{1,40})\s+)?"
+            r"(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+"
+            r"(?P<qty>[\d,]+(?:\.\d+)?)\s+(?P<price>[\d,]+(?:\.\d{1,2})?)\s+"
+            r"(?P<net>[\d,]+(?:\.\d{1,2})?)\s+(?P<rate>\d+(?:\.\d+)?)%\s+(?P<tax>[\d,]+(?:\.\d{1,2})?)",
+            text,
+            flags=re.I,
+        )
+        if invoice_line:
+            goods = str(invoice_line.group("goods") or "").strip()
+            if not goods:
+                tail = text[invoice_line.end() : invoice_line.end() + 60]
+                tail_match = re.search(r"^\s*([\u4e00-\u9fff]{2,20})", tail, flags=re.M) if tail else None
+                goods = tail_match.group(1).strip() if tail_match else ""
+            item = {
+                "model": invoice_line.group("model"),
+                "unit": invoice_line.group("unit"),
+                "quantity": clean_number(invoice_line.group("qty")),
+                "unitPrice": clean_number(invoice_line.group("price")),
+                "unitPriceNet": clean_number(invoice_line.group("price")),
+                "amount": clean_number(invoice_line.group("net")),
+                "netAmount": clean_number(invoice_line.group("net")),
+                "taxRate": invoice_line.group("rate"),
+                "taxAmount": clean_number(invoice_line.group("tax")),
+            }
+            if goods:
+                item["goodsName"] = goods
+            result.update({
+                "model": item["model"], "unit": item["unit"],
+                "quantity": item["quantity"], "unitPrice": item["unitPrice"], "unitPriceNet": item["unitPriceNet"],
+                "amount": item["amount"], "taxRate": item["taxRate"], "taxAmount": item["taxAmount"],
+                "items": [item],
+            })
+            if goods:
+                result["goodsName"] = goods
+
+        chinese_invoice_items: List[Dict[str, Any]] = []
+        invoice_rows = [line.strip() for line in text.splitlines()]
+        chinese_invoice_pattern = re.compile(
+            r"^(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+"
+            r"(?P<qty>[\d,]+(?:\.\d+)?)\s+(?P<price>[\d,]+(?:\.\d{1,2})?)\s+"
+            r"(?P<net>[\d,]+(?:\.\d{1,2})?)\s+(?P<rate>\d+(?:\.\d+)?)%\s+"
+            r"(?P<tax>[\d,]+(?:\.\d{1,2})?)$",
+            flags=re.I,
+        )
+        for index, raw_line in enumerate(invoice_rows):
+            match = chinese_invoice_pattern.match(raw_line)
+            if not match:
+                continue
+            goods = ""
+            for following in invoice_rows[index + 1 : index + 4]:
+                if not following or following.startswith("*"):
+                    continue
+                if re.fullmatch(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9（）()·\- ]{1,50}", following):
+                    goods = following.strip()
+                break
+            item = {
+                "model": match.group("model"),
+                "unit": match.group("unit"),
+                "quantity": clean_number(match.group("qty")),
+                "unitPrice": clean_number(match.group("price")),
+                "unitPriceNet": clean_number(match.group("price")),
+                "amount": clean_number(match.group("net")),
+                "netAmount": clean_number(match.group("net")),
+                "taxRate": match.group("rate"),
+                "taxAmount": clean_number(match.group("tax")),
+            }
+            if goods:
+                item["goodsName"] = goods
+            chinese_invoice_items.append(item)
+        if chinese_invoice_items:
+            set_primary_item(
+                chinese_invoice_items,
+                {
+                    "goodsName": "goodsName", "model": "model", "quantity": "quantity", "unit": "unit",
+                    "unitPrice": "unitPrice", "unitPriceNet": "unitPriceNet", "amount": "amount",
+                    "taxRate": "taxRate", "taxAmount": "taxAmount",
+                },
+            )
+
+        english_items: List[Dict[str, Any]] = []
+        for match in line_matches(
+            r"^\d+\s+(?P<goods>[A-Za-z][A-Za-z0-9 /&()\-]*?)\s+"
+            r"(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P<qty>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<unit>[A-Za-z]+)\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*"
+            r"(?P<price>[\d,]+(?:\.\d{1,2})?)\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*"
+            r"(?P<amount>[\d,]+(?:\.\d{1,2})?)$"
+        ):
+            english_items.append(
+                {
+                    "goodsName": match.group("goods").strip(),
+                    "model": match.group("model"),
+                    "quantity": clean_number(match.group("qty")),
+                    "unit": match.group("unit"),
+                    "unitPrice": clean_number(match.group("price")),
+                    "amount": clean_number(match.group("amount")),
+                }
+            )
+        if english_items:
+            set_primary_item(
+                english_items,
+                {"goodsName": "goodsName", "model": "model", "quantity": "quantity", "unit": "unit", "unitPrice": "unitPrice", "amount": "amount"},
+            )
+        wrapped_invoice = re.search(
+            r"N/M\s+(?P<goods1>[A-Z][A-Z ]*?)\s+(?P<qty>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<unit>[A-Z]+)\s+USD\s+(?P<price>[\d,]+(?:\.\d{1,2})?)\s+USD\s+"
+            r"(?P<amount>[\d,]+(?:\.\d{1,2})?)[^\n]*\n\s*(?P<goods2>[A-Z][A-Z ]+?)\s+[\d,]+\s+KGS\s*\n\s*"
+            r"(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)",
+            text,
+            flags=re.I,
+        )
+        if wrapped_invoice:
+            wrapped_item = {
+                "goodsName": f"{wrapped_invoice.group('goods1').strip()} {wrapped_invoice.group('goods2').strip()}".upper(),
+                "model": wrapped_invoice.group("model"),
+                "quantity": clean_number(wrapped_invoice.group("qty")),
+                "unit": wrapped_invoice.group("unit"),
+                "unitPrice": clean_number(wrapped_invoice.group("price")),
+                "amount": clean_number(wrapped_invoice.group("amount")),
+            }
+            set_primary_item(
+                [wrapped_item],
+                {"goodsName": "goodsName", "model": "model", "quantity": "quantity", "unit": "unit", "unitPrice": "unitPrice", "amount": "amount"},
+            )
+        english_total = first_value(
+            r"Total\s+Amount(?:\s+in\s+Words\s+Total\s+Amount)?[\s\S]{0,100}?"
+            r"(?:USD|CNY|RMB|EUR|GBP|\$)\s*([\d,]+(?:\.\d{1,2})?)",
+            re.I,
+        )
+        if english_total:
+            result["totalAmount"] = clean_number(english_total)
+
     if kind == "warehouse_receipt":
         line = re.search(
             r"(?:MAT|SKU)[-\s]?[A-Z0-9-]+.*?(?:件|个|台|套|PCS?)\s+(\d+(?:\.\d+)?)",
@@ -505,6 +942,200 @@ def extract_table_anchored_fields(ocr_text: str, document_type: str) -> Dict[str
         )
         if buyer:
             result["buyerName"] = buyer.group(1).strip()
+
+        receipt_line = re.search(
+            r"(?P<item_code>(?:MAT|SKU)[-A-Z0-9]+)\s+(?P<goods>[^\s]+)\s+"
+            r"(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P<batch>[A-Z0-9-]+)\s+"
+            r"(?P<shipped>[\d,]+(?:\.\d+)?)\s+(?P<accepted>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+[¥￥]?\s*(?P<price>[\d,]+(?:\.\d{1,2})?)\s+"
+            r"[¥￥]?\s*(?P<gross>[\d,]+(?:\.\d{1,2})?)",
+            text,
+            flags=re.I,
+        )
+        if receipt_line:
+            item = {
+                "itemCode": receipt_line.group("item_code"),
+                "goodsName": receipt_line.group("goods"),
+                "model": receipt_line.group("model"),
+                "batchNo": receipt_line.group("batch"),
+                "shippedQuantity": clean_number(receipt_line.group("shipped")),
+                "quantity": clean_number(receipt_line.group("accepted")),
+                "unit": receipt_line.group("unit"),
+                "unitPriceGross": clean_number(receipt_line.group("price")),
+                "totalAmount": clean_number(receipt_line.group("gross")),
+            }
+            result.update({
+                "itemCode": item["itemCode"], "goodsName": item["goodsName"], "model": item["model"],
+                "batchNo": item["batchNo"], "quantity": item["quantity"], "unit": item["unit"],
+                "unitPriceGross": item["unitPriceGross"], "totalAmount": item["totalAmount"], "items": [item],
+            })
+
+        receipt_items: List[Dict[str, Any]] = []
+        receipt_pattern = re.compile(
+            r"^(?P<item_code>(?:MAT|SKU)[-A-Z0-9]+)\s+"
+            r"(?:(?P<goods>[^\s\d¥￥]+)\s+)?(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+"
+            r"(?:(?P<batch>[A-Z]\d[A-Z0-9-]*)\s+)?(?P<shipped>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<accepted>[\d,]+(?:\.\d+)?)\s+(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+"
+            r"[¥￥]?\s*(?P<price>[\d,]+(?:\.\d{1,2})?)\s+[¥￥]?\s*(?P<gross>[\d,]+(?:\.\d{1,2})?)$",
+            flags=re.I,
+        )
+        for raw_line in text.splitlines():
+            match = receipt_pattern.match(raw_line.strip())
+            if not match:
+                continue
+            item = {
+                "itemCode": match.group("item_code"),
+                "model": match.group("model"),
+                "shippedQuantity": clean_number(match.group("shipped")),
+                "quantity": clean_number(match.group("accepted")),
+                "unit": match.group("unit"),
+                "unitPriceGross": clean_number(match.group("price")),
+                "totalAmount": clean_number(match.group("gross")),
+            }
+            if match.group("goods"):
+                item["goodsName"] = match.group("goods").strip()
+            if match.group("batch"):
+                item["batchNo"] = match.group("batch")
+            receipt_items.append(item)
+
+        for match in line_matches(
+            r"^(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+"
+            r"(?P<goods>[A-Za-z][A-Za-z0-9 /&()\-]*?)\s+(?P=model)\s+"
+            r"(?P<qty>[\d,]+(?:\.\d+)?)\s+(?P<unit>[A-Za-z]+)\s+"
+            r"(?:USD|CNY|RMB|EUR|GBP|\$)?\s*(?P<price>[\d,]+(?:\.\d{1,2})?)\s+"
+            r"(?:USD|CNY|RMB|EUR|GBP|\$)?\s*(?P<gross>[\d,]+(?:\.\d{1,2})?)$"
+        ):
+            receipt_items.append(
+                {
+                    "goodsName": match.group("goods").strip(),
+                    "model": match.group("model"),
+                    "quantity": clean_number(match.group("qty")),
+                    "unit": match.group("unit"),
+                    "unitPriceGross": clean_number(match.group("price")),
+                    "totalAmount": clean_number(match.group("gross")),
+                }
+            )
+        if receipt_items:
+            set_primary_item(
+                receipt_items,
+                {
+                    "itemCode": "itemCode", "goodsName": "goodsName", "model": "model",
+                    "batchNo": "batchNo", "quantity": "quantity", "unit": "unit",
+                    "unitPriceGross": "unitPriceGross", "totalAmount": "totalAmount",
+                },
+            )
+        accepted_total = first_value(
+            r"Total\s+Accepted\s+Amount\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*([\d,]+(?:\.\d{1,2})?)",
+            re.I,
+        )
+        if accepted_total:
+            result["totalAmount"] = clean_number(accepted_total)
+
+    if kind in {"contract", "purchase_order"}:
+        commercial_line = re.search(
+            r"^\s*\d+\s+(?P<goods>.+?)\s+(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P=model)\s+"
+            r"(?P<qty>[\d,]+(?:\.\d+)?)\s+(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+"
+            r"[¥￥]?\s*(?P<price>[\d,]+(?:\.\d{1,2})?)\s+[¥￥]?\s*(?P<gross>[\d,]+(?:\.\d{1,2})?)",
+            text,
+            flags=re.I | re.M,
+        )
+        if commercial_line:
+            item = {
+                "goodsName": commercial_line.group("goods").strip(),
+                "model": commercial_line.group("model"),
+                "quantity": clean_number(commercial_line.group("qty")),
+                "unit": commercial_line.group("unit"),
+                "unitPriceGross": clean_number(commercial_line.group("price")),
+                "totalAmount": clean_number(commercial_line.group("gross")),
+            }
+            result.update({
+                "goodsName": item["goodsName"], "model": item["model"], "quantity": item["quantity"],
+                "unit": item["unit"], "unitPriceGross": item["unitPriceGross"],
+                "totalAmount": item["totalAmount"], "items": [item],
+            })
+
+        commercial_items: List[Dict[str, Any]] = []
+        for match in line_matches(
+            r"^\d+\s+(?P<goods>.+?)\s+(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P=model)\s+"
+            r"(?P<qty>[\d,]+(?:\.\d+)?)\s+(?P<unit>[\u4e00-\u9fffA-Za-z]+)\s+"
+            r"[¥￥]?\s*(?P<price>[\d,]+(?:\.\d{1,2})?)\s+[¥￥]?\s*(?P<gross>[\d,]+(?:\.\d{1,2})?)$"
+        ):
+            commercial_items.append(
+                {
+                    "goodsName": match.group("goods").strip(),
+                    "model": match.group("model"),
+                    "quantity": clean_number(match.group("qty")),
+                    "unit": match.group("unit"),
+                    "unitPriceGross": clean_number(match.group("price")),
+                    "totalAmount": clean_number(match.group("gross")),
+                }
+            )
+        if commercial_items:
+            set_primary_item(
+                commercial_items,
+                {
+                    "goodsName": "goodsName", "model": "model", "quantity": "quantity",
+                    "unit": "unit", "unitPriceGross": "unitPriceGross", "totalAmount": "totalAmount",
+                },
+            )
+        english_commercial_items: List[Dict[str, Any]] = []
+        for match in line_matches(
+            r"^\d+\s+(?P<goods>[A-Za-z][A-Za-z0-9 /&()\-]*?)\s+"
+            r"(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+(?P<qty>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<unit>[A-Za-z]+)\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*"
+            r"(?P<price>[\d,]+(?:\.\d{1,2})?)\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*"
+            r"(?P<gross>[\d,]+(?:\.\d{1,2})?)$"
+        ):
+            english_commercial_items.append(
+                {
+                    "goodsName": match.group("goods").strip(),
+                    "model": match.group("model"),
+                    "quantity": clean_number(match.group("qty")),
+                    "unit": match.group("unit"),
+                    "unitPriceGross": clean_number(match.group("price")),
+                    "totalAmount": clean_number(match.group("gross")),
+                }
+            )
+        if english_commercial_items:
+            set_primary_item(
+                english_commercial_items,
+                {
+                    "goodsName": "goodsName", "model": "model", "quantity": "quantity", "unit": "unit",
+                    "unitPriceGross": "unitPriceGross", "totalAmount": "totalAmount",
+                },
+            )
+        english_total = first_value(
+            r"Total\s+(?:Order|Contract)\s+Value\s+(?:USD|CNY|RMB|EUR|GBP|\$)?\s*([\d,]+(?:\.\d{1,2})?)",
+            re.I,
+        )
+        if english_total:
+            result["totalAmount"] = clean_number(english_total)
+
+    if kind == "transport_document":
+        bol_goods = re.search(
+            r"N/M\s+\d+\s+(?:CASE|CASES|PACKAGE|PACKAGES)\s+"
+            r"(?P<goods>[A-Z][A-Z ]*?)\s+(?P<model>[A-Z0-9]+(?:-[A-Z0-9]+)+)\s+"
+            r"(?P<weight>[\d,]+(?:\.\d+)?)\s+KGS",
+            text,
+            flags=re.I,
+        )
+        if bol_goods:
+            item = {
+                "goodsName": bol_goods.group("goods").strip(),
+                "model": bol_goods.group("model"),
+                "grossWeight": clean_number(bol_goods.group("weight")),
+                "grossWeightUnit": "KGS",
+            }
+            set_primary_item([item], {"goodsName": "goodsName", "model": "model"})
+
+    gross = re.search(
+        r"(?:(?:合同)?价\s*税\s*合\s*计(?:\s*[（(]小写[）)])?|含税金额合计)"
+        r"[^¥￥\d]{0,50}[¥￥]\s*([\d,]+(?:\.\d{1,2})?)",
+        text,
+        flags=re.I,
+    )
+    if gross:
+        result["totalAmount"] = clean_number(gross.group(1))
 
     return result
 
@@ -775,7 +1406,10 @@ class LegacyOcrAdapter:
         """
         doc_type = _normalize_doc_type(document_type)
         # 文本型 PDF：本地抽取即可，避免 120s 级远程 OCR
-        pdf_text = _extract_pdf_text_layer(file_path)
+        pdf_text, pdf_blocks = _extract_pdf_text_evidence(file_path)
+        if not pdf_text:
+            # 保留单测/旧扩展通过 monkeypatch 此兼容入口注入文字的能力。
+            pdf_text = _extract_pdf_text_layer(file_path)
         if pdf_text and len(pdf_text.strip()) >= 40:
             logger.info(
                 "PDF 文字层短路 path={} chars={}",
@@ -788,6 +1422,7 @@ class LegacyOcrAdapter:
                 confidence=0.92,
                 documentType=doc_type,
                 source="pdf_text",
+                textBlocks=pdf_blocks,
             ).model_dump()
 
         try:
@@ -953,10 +1588,11 @@ class LegacyOcrAdapter:
         *,
         target_fields: Optional[List[str]] = None,
         fast_batch: bool = False,
+        allow_llm_field_supplement: bool = False,
     ) -> dict:
         """从 OCR 文本提取字段。
 
-        默认 llm_first：语义理解为主，正则仅作种子/兜底，避免每遇新表述就加规则。
+        规则与表格锚点始终先运行。只有调用方逐次显式授权时才允许外部模型补缺。
         target_fields：OCR 前确认的字段清单；有值时 LLM 优先抽这些键（含自定义）。
         """
         doc_type = _normalize_doc_type(document_type)
@@ -970,15 +1606,36 @@ class LegacyOcrAdapter:
             or "llm_first"
         ).strip().lower()
         planned = [str(x).strip() for x in (target_fields or []) if str(x).strip()]
+        for key in _GROUNDED_TARGET_FIELDS.get(doc_type, ()):
+            if key not in planned:
+                planned.append(key)
 
         def _finalize(fields: Dict[str, Any]) -> Dict[str, Any]:
             normalized, _ = normalize_extracted_fields(fields, ocr_raw_text)
-            return apply_receipt_date_fields(
+            normalized = apply_receipt_date_fields(
                 normalized, ocr_raw_text, document_type=doc_type
             )
+            if doc_type != "invoice":
+                normalized.pop("invoiceNo", None)
+                normalized.pop("invoiceCode", None)
+            if doc_type != "contract":
+                # 其他单据只有在原文明确出现合同号时才保留，避免模型把订单号串成合同号。
+                if not re.search(
+                    r"(?:合同(?:编号|号)|(?:S/C|Contract)\s+No\.?)\s*[:：]?\s*[A-Za-z0-9]",
+                    ocr_raw_text,
+                    flags=re.I,
+                ):
+                    normalized.pop("contractNo", None)
+            return normalized
 
-        if mode == "heuristic" or not is_valid_api_credential(self.llm_api_key):
-            if mode != "heuristic":
+        if (
+            mode == "heuristic"
+            or not allow_llm_field_supplement
+            or not is_valid_api_credential(self.llm_api_key)
+        ):
+            if mode != "heuristic" and not allow_llm_field_supplement:
+                logger.info("本次未显式授权 LLM 字段补缺，使用规则与表格锚点结果")
+            elif mode != "heuristic":
                 logger.warning("LLM Key 未配置，使用启发式提取")
             fields = _finalize(base)
             if not fields.get("totalAmount") and not self.use_mock_when_unavailable:
@@ -1020,6 +1677,9 @@ class LegacyOcrAdapter:
                 system=UNIFIED_SYSTEM_PROMPT,
             )
             merged = _merge_ai_and_base(ai_fields, base)
+            # 原件表头/明细行可直接复核的字段优先于模型猜测。
+            # LLM 负责补缺和语义理解，不得覆盖单据自身编号、数量、金额或主体锚点。
+            merged.update(anchored)
             # 关键语义字段仍缺 → 二次补抽（针对缺失字段提问，不扩正则）
             still_missing = _missing_semantic_fields(doc_type, merged)
             if planned:
@@ -1049,6 +1709,7 @@ class LegacyOcrAdapter:
                             merged[k] = gap[k]
                 except Exception as gap_exc:  # noqa: BLE001
                     logger.warning("LLM gap-fill failed: {}", gap_exc)
+            merged.update(anchored)
             return _finalize(merged)
         except Exception as exc:  # noqa: BLE001
             err_body = ""
@@ -1067,12 +1728,16 @@ class LegacyOcrAdapter:
         current_fields: Dict[str, Any],
         *,
         only_fields: Optional[List[str]] = None,
+        allow_llm_field_supplement: bool = False,
     ) -> Dict[str, Any]:
         """仅针对缺失字段再跑一轮 LLM；无 Key / 无正文则原样返回。"""
         doc_type = _normalize_doc_type(document_type)
         merged = dict(current_fields or {})
         missing = list(only_fields or _missing_semantic_fields(doc_type, merged))
         if not missing or not str(ocr_raw_text or "").strip():
+            return merged
+        if not allow_llm_field_supplement:
+            logger.info("本次未显式授权 LLM 字段补缺，保留规则提取结果")
             return merged
         if not is_valid_api_credential(self.llm_api_key):
             logger.warning("LLM Key 未配置，跳过字段 gap-fill")

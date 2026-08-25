@@ -3,6 +3,10 @@ import { api } from '../api'
 import { DocPreview } from '../components/DocPreview'
 import { CapturePreview } from '../components/CapturePreview'
 import { FieldComparisonMatrix } from '../components/FieldComparisonMatrix'
+import { ExplainableFieldMatrix } from '../components/ExplainableFieldMatrix'
+import { FieldReasonDrawer } from '../components/FieldReasonDrawer'
+import { BusinessChronologyPanel } from '../components/BusinessChronologyPanel'
+import { ResolutionIssuesPanel } from '../components/ResolutionIssuesPanel'
 import { useActiveChainFiles } from '../lib/useActiveChainFiles'
 import { useJobChainIds } from '../lib/useJobChainIds'
 import { buildWorkflowGuide } from '../lib/workflowGuide'
@@ -10,27 +14,31 @@ import { effectiveFields, highlightLocateValue } from '../lib/readableFields'
 import { confirmLinkagePrimary } from '../lib/confirmLinkage'
 import { AmountAmbiguityPanel } from '../components/AmountAmbiguityPanel'
 import { activeSample, isGospdJob } from '../lib/chainDocs'
-import type { ClassifiedDoc, Job } from '../types'
-
-const TYPE_LABELS: Record<string, string> = {
-  contract: '销售合同',
-  order: '销售订单',
-  delivery: '发货单',
-  receipt: '签收/验收',
-  invoice: '发票',
-  payment: '回款',
-  other: '其他',
-}
+import { consumeFieldTraceTarget } from '../lib/fieldTraceNavigation'
+import { DOCUMENT_TYPE_LABELS, documentTypeLabel } from '../lib/documentTypeDisplay'
+import type {
+  ClassifiedDoc,
+  ExplainableComparisonRow,
+  FieldEvidenceNode,
+  FieldResolution,
+  Job,
+} from '../types'
 
 const FIELD_CN: Record<string, string> = {
   documentNo: '单据编号',
   contractNo: '合同编号',
   orderNo: '订单编号',
   invoiceNo: '发票号码',
+  invoiceCode: '发票代码',
+  receiptNo: '验收单号',
   documentDate: '单据日期',
   postingDate: '入账日期',
   deliveryDate: '发货日期',
-  acceptanceDate: '签收日期',
+  acceptanceDate: '文件日期',
+  plannedDeliveryDate: '计划交付日期',
+  arrivalDateTime: '到货时间',
+  acceptanceDateTime: '验收完成时间',
+  invoiceDateTime: '开票时间',
   paymentTerms: '付款条款',
   controlTransferTerms: '控制权转移',
   settlementTerms: '结算条款',
@@ -38,9 +46,23 @@ const FIELD_CN: Record<string, string> = {
   totalAmount: '价税合计',
   amount: '金额',
   taxAmount: '税额',
+  taxRate: '税率',
+  unitPrice: '单价（发票未税）',
+  unitPriceNet: '未税单价',
+  unitPriceGross: '含税单价',
   quantity: '数量',
-  supplierName: '销方/供应商',
+  unit: '单位',
+  supplierName: '卖方',
   buyerName: '购方',
+  sellerTaxId: '卖方税号',
+  buyerTaxId: '买方税号',
+  sellerAddress: '卖方地址',
+  buyerAddress: '买方地址/交货地点',
+  goodsName: '货品名称',
+  model: '规格型号',
+  customerCode: '客户编码',
+  itemCode: '物料编码',
+  batchNo: '批次',
   remarks: '备注',
 }
 
@@ -99,7 +121,8 @@ type Props = {
   /** @deprecated 字段核对固定全屏；保留参数以免旧调用报错 */
   embedded?: boolean
   onOpenFull?: () => void
-  onBackToDesk?: () => void
+  onDirtyChange?: (dirty: boolean) => void
+  onGo?: (step: string) => void
 }
 
 function editableKeys(doc: ClassifiedDoc): string[] {
@@ -117,13 +140,35 @@ function editableKeys(doc: ClassifiedDoc): string[] {
   return keys
 }
 
-export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDesk }: Props) {
+function normalizeFieldValue(key: string, value: unknown): string {
+  let text = ''
+  if (value != null) {
+    if (typeof value === 'object') {
+      try {
+        text = JSON.stringify(value)
+      } catch {
+        text = String(value)
+      }
+    } else {
+      text = String(value)
+    }
+  }
+  text = text.trim()
+  if (['quantity', 'amount', 'taxAmount', 'totalAmount', 'taxRate'].includes(key)) {
+    const numeric = Number(text.replace(/,/g, ''))
+    return text && Number.isFinite(numeric) ? String(numeric) : text
+  }
+  return text
+}
+
+export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onDirtyChange, onGo }: Props) {
   const { chainFileNames, chainDocs, activeChain } = useActiveChainFiles(job)
   const chainIds = useJobChainIds(job)
   const docs = chainDocs
   const [idx, setIdx] = useState(0)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [docType, setDocType] = useState('other')
+  const [customDocTypeName, setCustomDocTypeName] = useState('')
   const [hl, setHl] = useState<string | null>(null)
   /** 点击/聚焦时快照，避免边打字边反复请求高亮 */
   const [hlValue, setHlValue] = useState('')
@@ -135,6 +180,8 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
   const [addKey, setAddKey] = useState('')
   const [addVal, setAddVal] = useState('')
   const [editReason, setEditReason] = useState('')
+  /** 只有审计师实际操作过字段编辑控件后，才允许进入未保存判断。 */
+  const [hasUserEdited, setHasUserEdited] = useState(false)
   const [captureOn, setCaptureOn] = useState(false)
   const [docsCollapsed, setDocsCollapsed] = useState(() => {
     try {
@@ -159,11 +206,52 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
   })
   const [matrixDoc, setMatrixDoc] = useState<ClassifiedDoc | null>(null)
   const [matrixRefreshKey, setMatrixRefreshKey] = useState(0)
+  const [fetchedResolution, setFetchedResolution] = useState<{
+    chainId: string
+    value: FieldResolution
+  } | null>(null)
+  const [reasonRow, setReasonRow] = useState<ExplainableComparisonRow | null>(null)
+  const [showResolutionDetails, setShowResolutionDetails] = useState(false)
+  const [resolutionBusy, setResolutionBusy] = useState(false)
+  const resolutionRequestRef = useRef('')
   /** 对照表点格后保留高亮，避免切 doc 的 effect 立刻清 hl */
   const matrixHlRef = useRef<{ file: string; field: string; value: string } | null>(null)
 
   const sample = isGospdJob(job) ? activeSample(job) : null
   const fieldsOk = Boolean(sample ? sample.fields_confirmed : job.fields_confirmed)
+  const persistedResolution = (sample?.field_resolution || null) as FieldResolution | null
+  const resolutionChainId = String(activeChain?.chain_id || job.active_chain_id || '').trim()
+  const dynamicResolution = persistedResolution || (
+    fetchedResolution?.chainId === resolutionChainId ? fetchedResolution.value : null
+  )
+  const dynamicResolutionId = dynamicResolution?.resolution_id || ''
+
+  useEffect(() => {
+    const requestKey = `${job.job_id}:${resolutionChainId}`
+    if (viewMode !== 'matrix' || dynamicResolutionId || !resolutionChainId) return
+    if (resolutionRequestRef.current === requestKey) return
+    let cancelled = false
+    resolutionRequestRef.current = requestKey
+    setResolutionBusy(true)
+    api.refreshFieldResolution(job.job_id, resolutionChainId)
+      .then((resolution) => {
+        if (!cancelled && resolutionRequestRef.current === requestKey) {
+          setFetchedResolution({ chainId: resolutionChainId, value: resolution })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled && resolutionRequestRef.current === requestKey) {
+          setErr(error instanceof Error ? error.message : String(error))
+        }
+      })
+      .finally(() => {
+        if (!cancelled && resolutionRequestRef.current === requestKey) {
+          resolutionRequestRef.current = ''
+          setResolutionBusy(false)
+        }
+      })
+    return () => { cancelled = true }
+  }, [viewMode, dynamicResolutionId, resolutionChainId, job.job_id])
 
   const setView = (mode: 'doc' | 'matrix') => {
     setViewMode(mode)
@@ -187,7 +275,45 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
   }
 
   const doc = docs[idx]
-  const previewDoc = matrixDoc || doc
+  const currentMatrixDoc = matrixDoc
+    ? docs.find((item) => item.file_name === matrixDoc.file_name) || matrixDoc
+    : null
+  const previewDoc = currentMatrixDoc || doc
+  const isDirty = useMemo(() => {
+    if (!hasUserEdited) return false
+    const target = previewDoc || doc
+    if (!target) return false
+    const saved = effectiveFields(target)
+    const changedField = Object.entries(draft).some(
+      ([key, value]) => normalizeFieldValue(key, value) !== normalizeFieldValue(key, saved[key]),
+    )
+    const completeAddedField = Boolean(addKey.trim() && addVal.trim())
+    const changedTypeName =
+      docType === 'other' &&
+      customDocTypeName.trim() !== String(target.custom_doc_type_name || '').trim()
+    return changedField || docType !== (target.doc_type || 'other') || changedTypeName || completeAddedField
+  }, [hasUserEdited, previewDoc, doc, draft, docType, customDocTypeName, addKey, addVal])
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [isDirty, onDirtyChange])
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false)
+    },
+    [onDirtyChange],
+  )
+
+  const allowDiscardChanges = () =>
+    !isDirty || window.confirm('当前单据有未保存的字段修改，确定放弃修改并切换吗？')
 
   const matrixDraftOverlay = useMemo(() => {
     const target = previewDoc || doc
@@ -204,9 +330,15 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
     }
     setDraft(next)
     setDocType(item.doc_type || 'other')
+    setCustomDocTypeName(item.custom_doc_type_name || '')
+    setAddKey('')
+    setAddVal('')
+    setEditReason('')
+    setHasUserEdited(false)
   }
 
   const onMatrixCell = (d: ClassifiedDoc, fieldKey: string) => {
+    if (previewDoc?.file_name !== d.file_name && !allowDiscardChanges()) return
     const i = docs.findIndex((x) => x.file_name === d.file_name)
     const eff = effectiveFields(d)
     const draftVal = previewDoc?.file_name === d.file_name ? draft[fieldKey] : undefined
@@ -248,6 +380,27 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
     setHlValue('')
     setCaptureOn(false)
   }, [job.active_chain_id, chainFileNames?.join('|')])
+
+  useEffect(() => {
+    const target = consumeFieldTraceTarget(job.job_id, job.active_chain_id || '')
+    if (!target) return
+    const targetDoc = docs.find((item) => item.file_name === target.fileName)
+    if (!targetDoc) {
+      setMsg(`已进入核对字段，但未找到原件：${target.fileName}`)
+      return
+    }
+    const targetIndex = docs.findIndex((item) => item.file_name === target.fileName)
+    const value = highlightLocateValue(targetDoc, target.fieldKey, effectiveFields(targetDoc)[target.fieldKey])
+    matrixHlRef.current = { file: targetDoc.file_name, field: target.fieldKey, value }
+    setViewMode('matrix')
+    setFieldsCollapsed(true)
+    if (targetIndex >= 0) setIdx(targetIndex)
+    setMatrixDoc(targetDoc)
+    setHl(target.fieldKey)
+    setHlValue(value)
+    setCaptureOn(false)
+    setMsg(`已定位原件：${targetDoc.file_name} · ${FIELD_CN[target.fieldKey] || target.fieldKey}`)
+  }, [job.job_id, job.active_chain_id, chainFileNames?.join('|')])
 
   useEffect(() => {
     if (!doc) {
@@ -314,9 +467,11 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
       </button>
       <div className="field-input-wrap">
         <input
+          aria-label={FIELD_CN[k] || k}
           value={draft[k] ?? ''}
           onChange={(e) => {
             const v = e.target.value
+            setHasUserEdited(true)
             setDraft((d) => ({ ...d, [k]: v }))
             if (hl === k) setHlValue(v)
           }}
@@ -343,12 +498,18 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
   const save = async () => {
     const target = previewDoc || doc
     if (!target) return
+    if (docType === 'other' && !customDocTypeName.trim()) {
+      setErr('请填写当前文件的具体单据名称')
+      return
+    }
     setBusy(true)
     setErr('')
     setMsg('')
     try {
       const fields: Record<string, unknown> = { ...(target.fields || {}) }
+      const saved = effectiveFields(target)
       for (const [k, text] of Object.entries(draft)) {
+        if (normalizeFieldValue(k, text) === normalizeFieldValue(k, saved[k])) continue
         const t = (text || '').trim()
         if (!t) {
           delete fields[k]
@@ -359,11 +520,13 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
           fields[k] = Number.isFinite(n) ? n : t
         } else fields[k] = t
       }
-      if (addKey.trim()) fields[addKey.trim()] = addVal
+      if (addKey.trim() && addVal.trim()) fields[addKey.trim()] = addVal
       const next = await api.patchFields(job.job_id, {
         file_name: target.file_name,
         fields,
-        doc_type: target.doc_type || docType,
+        doc_type: docType,
+        custom_doc_type_name: docType === 'other' ? customDocTypeName.trim() : undefined,
+        doc_type_confirmed: true,
         reason: editReason || undefined,
       })
       onJob(next)
@@ -390,6 +553,58 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
     }
   }
 
+  const onResolutionEvidence = (evidenceId: string) => {
+    const node = dynamicResolution?.evidence_nodes.find((item) => item.evidence_id === evidenceId)
+    if (!node) return
+    const fileName = String(node.metadata?.file_name || node.document_id || '')
+    const target = docs.find((item) =>
+      item.file_name === fileName || item.file_fingerprint === node.document_id,
+    )
+    if (!target) {
+      setErr(`证据对应原件未找到：${fileName || evidenceId}`)
+      return
+    }
+    onMatrixCell(target, node.field_key)
+  }
+
+  const decideResolutionIssue = async ({
+    edgeId,
+    decision,
+    reason,
+  }: {
+    edgeId: string
+    decision: 'CONFIRMED' | 'REJECTED'
+    reason: string
+  }) => {
+    if (!resolutionChainId) return
+    const resolution = await api.decideFieldResolutionEdge(job.job_id, edgeId, {
+      chain_id: resolutionChainId,
+      decision,
+      reason,
+    })
+    setFetchedResolution({ chainId: resolutionChainId, value: resolution })
+    setMsg('判断依据已记录，原始字段和证据保持不变。')
+  }
+
+  const declareCurrentMixed = async () => {
+    const target = previewDoc || doc
+    if (!target || !target.file_name.toLowerCase().endsWith('.pdf')) return
+    if (!allowDiscardChanges()) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const next = await api.declareMixed(job.job_id, target.file_name)
+      onDirtyChange?.(false)
+      onJob(next)
+      onGo?.('packet_unpack')
+    } catch (reason) {
+      setErr(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   /** 确认后横扫下一笔；只切权威链，避免幽灵 HT 空转 */
   const advanceAfterConfirm = async (j: Job, baseMsg: string) => {
     const g = buildWorkflowGuide(j, { chainIds })
@@ -406,7 +621,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
     }
     onJob(j)
     if (g.sweepPhase && g.sweepPhase !== 'fields' && g.sweepPhase !== 'evidence' && g.sweepPhase !== 'gate4') {
-      setMsg(`${baseMsg} 人工核对已齐，请回工作台继续「${g.ctaLabel}」。`)
+      setMsg(`${baseMsg} 人工核对已齐，请继续「${g.ctaLabel}」。`)
     } else if (g.action.kind === 'go' && g.action.step === 'field_confirm') {
       setMsg(`${baseMsg} 请继续在本页完成其余笔的人工核对。`)
     } else {
@@ -418,14 +633,19 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
     setBusy(true)
     setErr('')
     try {
-      const next = await api.confirmFields(job.job_id)
+      const confirmedChain = job.active_chain_id || activeChain?.chain_id || ''
+      const next = await api.confirmFields(job.job_id, confirmedChain)
+      if (confirmedChain && next.active_chain_id && next.active_chain_id !== confirmedChain) {
+        onJob(next)
+        setMsg(`已确认 ${confirmedChain} 字段；服务器当前笔为 ${next.active_chain_id}，未自动处理其他业务笔。`)
+        return
+      }
       try {
         const linked = await confirmLinkagePrimary(next)
         await advanceAfterConfirm(linked.job, '字段已确认，测试将自动继续。')
       } catch {
         await advanceAfterConfirm(next, '本笔字段已确认。')
       }
-      if (onBackToDesk) onBackToDesk()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
@@ -509,7 +729,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
           <p className="preview-empty">
             {job.classified?.length
               ? `当前笔（${job.active_chain_id || '-'}）暂无单据，请切换业务链或重新上传。`
-              : '请先回工作台上传抽样清单，再传凭证并识别。'}
+              : '请先到“上传抽样清单”页面导入清单，再到“上传凭证”页面上传并识别。'}
           </p>
         </div>
       </div>
@@ -578,14 +798,16 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
               </button>
               {viewMode === 'matrix' && (
                 <>
-                  <button
-                    type="button"
-                    className="btn compact"
-                    disabled={busy || !previewDoc}
-                    onClick={() => void save()}
-                  >
-                    保存本单
-                  </button>
+                  {!fieldsCollapsed && isDirty && (
+                    <button
+                      type="button"
+                      className="btn compact"
+                      disabled={busy || !previewDoc}
+                      onClick={() => void save()}
+                    >
+                      保存本单
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn compact"
@@ -602,11 +824,6 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
               )}
             </div>
             <div className="toolbar">
-              {onBackToDesk && (
-                <button type="button" className="btn compact" onClick={onBackToDesk}>
-                  回工作台
-                </button>
-              )}
               <span className="tip-anchor" data-tip="只补当前业务笔里还空着的字段，不覆盖你已改过的值。">
                 <button
                   type="button"
@@ -627,7 +844,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
               >
                 <button
                   className="btn primary"
-                  disabled={busy || gapBusy || ambOpenCount > 0}
+                  disabled={busy || gapBusy || ambOpenCount > 0 || isDirty}
                   onClick={() => void confirmAll()}
                 >
                   确认本笔字段
@@ -642,10 +859,18 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                 onJob(j)
                 setMatrixRefreshKey((k) => k + 1)
               }}
-              onOpenCount={setAmbOpenCount}
+              onOpenCount={(count) => {
+                setAmbOpenCount(count)
+                if (count === 0) {
+                  setErr((current) =>
+                    /金额歧义|金额待确认/.test(current) ? '' : current,
+                  )
+                }
+              }}
               onFocusFile={(name) => {
                 const i = docs.findIndex((d) => d.file_name === name)
                 if (i < 0) return
+                if (i !== idx && !allowDiscardChanges()) return
                 setIdx(i)
                 setMatrixDoc(docs[i])
                 setHl(null)
@@ -703,6 +928,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                   type="button"
                   className={`doc-item${i === idx ? ' active' : ''}`}
                   onClick={() => {
+                    if (i !== idx && !allowDiscardChanges()) return
                     setIdx(i)
                     setMatrixDoc(null)
                     setHl(null)
@@ -713,7 +939,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                   }}
                 >
                   {d.manual_edited ? <span className="badge warn">已改</span> : null}{' '}
-                  {TYPE_LABELS[d.doc_type] || d.doc_type}
+                  {documentTypeLabel(d)}
                   <small>{d.file_name}</small>
                 </button>
               ))}
@@ -724,6 +950,16 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
           <div className="pane pane-matrix">
             <div className="pane-title">
               <span>字段对照 · 跨单据横比</span>
+              <button
+                type="button"
+                className="btn compact"
+                disabled={!dynamicResolution?.comparison_plan}
+                aria-expanded={showResolutionDetails}
+                onClick={() => setShowResolutionDetails((value) => !value)}
+                data-tip="主表保持全部字段横向展开；需要时再查看规则、复算和证据链。"
+              >
+                {showResolutionDetails ? '收起判断依据' : resolutionBusy ? '判断依据准备中…' : '查看判断依据'}
+              </button>
             </div>
             <div className="pane-scroll">
               <FieldComparisonMatrix
@@ -736,6 +972,43 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                 refreshKey={matrixRefreshKey}
                 requiredRows={requiredRows}
               />
+              {showResolutionDetails && dynamicResolution?.comparison_plan ? (
+                <div className="resolution-workspace resolution-workspace-secondary" aria-label="判断依据">
+                  <ExplainableFieldMatrix
+                    plan={dynamicResolution.comparison_plan}
+                    onExplain={setReasonRow}
+                    onSelectEvidence={onResolutionEvidence}
+                  />
+                  <BusinessChronologyPanel
+                    chronology={dynamicResolution.comparison_plan.domains.chronology}
+                    onSelectEvidence={onResolutionEvidence}
+                  />
+                  <section className="resolution-section" aria-labelledby="document-specific-title">
+                    <header className="resolution-section-head"><div>
+                      <h3 id="document-specific-title">单据专有信息</h3>
+                      <p>用于追溯单据身份和业务过程，不计入三单一致性结果。</p>
+                    </div></header>
+                    <div className="document-specific-grid">
+                      {dynamicResolution.comparison_plan.domains.document_specific.map((item) => (
+                        <button
+                          key={item.row_id}
+                          type="button"
+                          className="document-specific-item"
+                          onClick={() => item.evidence_id && onResolutionEvidence(item.evidence_id)}
+                        >
+                          <span>{FIELD_CN[item.field_key] || item.label || item.field_key}</span>
+                          <strong>{String(item.value ?? '—')}</strong>
+                          <small>{item.document_role || '单据'}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                  <ResolutionIssuesPanel
+                    issues={dynamicResolution.comparison_plan.domains.issues}
+                    onDecision={decideResolutionIssue}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         )}
@@ -744,7 +1017,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
             <span>
               {captureOn && hl
                 ? `取证 · ${FIELD_CN[hl] || hl}`
-                : `原件预览 · ${TYPE_LABELS[previewDoc?.doc_type || ''] || previewDoc?.doc_type || '-'}${hl ? ` · ${FIELD_CN[hl] || hl}` : ''}`}
+                : `原件预览 · ${previewDoc ? documentTypeLabel(previewDoc) : '-'}${hl ? ` · ${FIELD_CN[hl] || hl}` : ''}`}
             </span>
             <span className="toolbar">
               {docsCollapsed && (
@@ -753,7 +1026,9 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                     className="field-select compact"
                     value={idx}
                     onChange={(e) => {
-                      setIdx(Number(e.target.value))
+                      const nextIndex = Number(e.target.value)
+                      if (nextIndex !== idx && !allowDiscardChanges()) return
+                      setIdx(nextIndex)
                       setMatrixDoc(null)
                       setHl(null)
                       setHlValue('')
@@ -764,7 +1039,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                   >
                     {docs.map((d, i) => (
                       <option key={d.file_name} value={i}>
-                        {TYPE_LABELS[d.doc_type] || d.doc_type} · {i + 1}
+                        {documentTypeLabel(d)} · {i + 1}
                       </option>
                     ))}
                   </select>
@@ -837,6 +1112,7 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                 fieldKey={hl}
                 fieldLabel={FIELD_CN[hl] || hl}
                 onApply={(text) => {
+                  setHasUserEdited(true)
                   setDraft((d) => ({ ...d, [hl]: text }))
                   setHlValue(text)
                   setMsg(`已从原件取证填入「${FIELD_CN[hl] || hl}」，对照表已更新；请点「保存本单」落库。`)
@@ -887,18 +1163,58 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
           </div>
           {!fieldsCollapsed && (
           <div className="pane-scroll">
+            {previewDoc?.doc_type === 'other' && !previewDoc.doc_type_confirmed && (
+              <div className="type-uncertain-banner" role="status">
+                <strong>文件类型不确定，疑似内部存在杂乱的文件类型</strong>
+                <span>请逐页查看当前文件，并在下方确认一个仅对本文件生效的具体名称。</span>
+              </div>
+            )}
             <label className="hint">识别类型</label>
             <select
               className="field-select"
               value={docType}
-              onChange={(e) => setDocType(e.target.value)}
+              onChange={(e) => {
+                setHasUserEdited(true)
+                setDocType(e.target.value)
+              }}
             >
-              {Object.entries(TYPE_LABELS).map(([k, v]) => (
+              {Object.entries(DOCUMENT_TYPE_LABELS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v}
                 </option>
               ))}
             </select>
+            {docType === 'other' && (
+              <div className="custom-document-type">
+                <label htmlFor="current-file-document-type">当前文件具体名称</label>
+                <input
+                  id="current-file-document-type"
+                  className="field-input"
+                  value={customDocTypeName}
+                  placeholder="例如：海运提单"
+                  maxLength={80}
+                  onChange={(event) => {
+                    setHasUserEdited(true)
+                    setCustomDocTypeName(event.target.value)
+                    if (err === '请填写当前文件的具体单据名称') setErr('')
+                  }}
+                />
+                <p className="hint">仅修改当前文件名称，不新增系统单据类型。</p>
+              </div>
+            )}
+            {previewDoc?.file_name.toLowerCase().endsWith('.pdf') && (
+              <div className="manual-mixed-action">
+                <button
+                  type="button"
+                  className="btn compact"
+                  disabled={busy}
+                  onClick={() => void declareCurrentMixed()}
+                >
+                  转为混装资料包
+                </button>
+                <span className="hint">仅在逐页确认同一 PDF 内确有多张不同单据时使用。</span>
+              </div>
+            )}
             <div className="hint mt-8 mb-8">
               下列为本笔必填字段（随本笔单据类型变化）；点字段名可高亮原件。确认仍覆盖本单全部字段。
             </div>
@@ -934,13 +1250,19 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
                 className="field-input"
                 placeholder="字段名"
                 value={addKey}
-                onChange={(e) => setAddKey(e.target.value)}
+                onChange={(e) => {
+                  setHasUserEdited(true)
+                  setAddKey(e.target.value)
+                }}
               />
               <input
                 className="field-input"
                 placeholder="字段值"
                 value={addVal}
-                onChange={(e) => setAddVal(e.target.value)}
+                onChange={(e) => {
+                  setHasUserEdited(true)
+                  setAddVal(e.target.value)
+                }}
               />
             </details>
             {hl && (
@@ -1002,9 +1324,6 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
               })()}
             </details>
             <div className="field-actions">
-              <button className="btn primary" disabled={busy} onClick={() => void save()}>
-                保存本单修改
-              </button>
               {msg && <div className="ok-text">{msg}</div>}
               {err && <div className="err">{err}</div>}
             </div>
@@ -1012,6 +1331,16 @@ export function FieldConfirmPage({ job, onJob, embedded, onOpenFull, onBackToDes
           )}
         </div>
       </div>
+      <FieldReasonDrawer
+        open={Boolean(reasonRow)}
+        row={reasonRow}
+        evidenceNodes={(dynamicResolution?.evidence_nodes || []) as FieldEvidenceNode[]}
+        onClose={() => setReasonRow(null)}
+        onSelectEvidence={(evidenceId) => {
+          onResolutionEvidence(evidenceId)
+          setReasonRow(null)
+        }}
+      />
     </div>
   )
 }

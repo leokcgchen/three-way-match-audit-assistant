@@ -10,8 +10,11 @@ type Props = {
   busy?: boolean
   uploading?: boolean
   uploadError?: string
+  completeSetBusy?: boolean
+  mode?: 'overview' | 'upload'
   onOpen: (row: ChainInfo) => void
-  onUpload: (row: ChainInfo, files: File[]) => void | Promise<void>
+  onUpload?: (row: ChainInfo, files: File[]) => void | Promise<void>
+  onCompleteSetChange?: (row: ChainInfo, next: boolean) => void | Promise<void>
 }
 
 function lightClass(light?: string): string {
@@ -31,8 +34,11 @@ export function BusinessWarehouseRow({
   busy = false,
   uploading = false,
   uploadError = '',
+  completeSetBusy = false,
+  mode = 'upload',
   onOpen,
   onUpload,
+  onCompleteSetChange,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
@@ -46,11 +52,12 @@ export function BusinessWarehouseRow({
       ? (row.missing_labels || []).join('、')
       : ''
   const diff = (row.diff_lines || [])[0]
+  const uploadEnabled = mode === 'upload' && Boolean(onUpload)
   const disabled = busy || uploading
 
   const uploadFiles = (files: File[]) => {
-    if (disabled || files.length === 0) return
-    void onUpload(row, files)
+    if (!uploadEnabled || disabled || files.length === 0) return
+    void onUpload?.(row, files)
   }
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -94,10 +101,10 @@ export function BusinessWarehouseRow({
     <li
       className={`desk-sample-row desk-sample-row-stack business-warehouse-row${active ? ' is-on' : ''}${dragging ? ' is-dragging' : ''}`}
       aria-busy={uploading}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={uploadEnabled ? handleDragEnter : undefined}
+      onDragOver={uploadEnabled ? handleDragOver : undefined}
+      onDragLeave={uploadEnabled ? handleDragLeave : undefined}
+      onDrop={uploadEnabled ? handleDrop : undefined}
     >
       <button
         type="button"
@@ -109,9 +116,12 @@ export function BusinessWarehouseRow({
         <span className={`desk-sample-light ${lightClass(row.light)}`} aria-hidden />
         <span className="desk-sample-body">
           <span className="desk-sample-id-line">
-            <span className="desk-sample-id">{row.chain_id}</span>
+            <span className="desk-sample-id">{row.display_index || row.chain_id}</span>
             {row.reason === 'fail_closed' ? <span className="desk-sample-ack">已人工确认</span> : null}
           </span>
+          {row.order_numbers?.length ? (
+            <span className="desk-sample-index-label">业务主键 &amp; 订单别名</span>
+          ) : null}
           <span className="desk-sample-meta">已识别：{present}</span>
           <span className={missDocs ? 'desk-sample-miss' : 'desk-sample-meta'}>
             缺单据：{missDocs || '无'}
@@ -128,7 +138,7 @@ export function BusinessWarehouseRow({
         </span>
       </button>
 
-      <div className="business-warehouse-upload">
+      {uploadEnabled ? <div className="business-warehouse-upload">
         <input
           ref={inputRef}
           type="file"
@@ -150,9 +160,26 @@ export function BusinessWarehouseRow({
           {uploading ? '上传中…' : '请上传'}
         </button>
         <span className="business-upload-hint">或拖到本行</span>
-      </div>
+        {onCompleteSetChange ? (
+          <label
+            className="business-complete-set"
+            data-tip="勾选表示本笔所需凭证已经全部上传；若累计仍不足，系统会转为红灯。"
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(row.complete_set)}
+              disabled={disabled || completeSetBusy}
+              aria-label={`本笔已齐套：${row.chain_id}`}
+              onChange={(event) => {
+                void onCompleteSetChange(row, event.target.checked)
+              }}
+            />
+            <span>{completeSetBusy ? '保存中…' : '本笔已齐套'}</span>
+          </label>
+        ) : null}
+      </div> : null}
 
-      {dragging ? (
+      {uploadEnabled && dragging ? (
         <span className="business-drop-cue" role="status">
           将 {dragCount || 1} 个文件关联到业务 {row.chain_id}
         </span>

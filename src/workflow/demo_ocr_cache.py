@@ -305,6 +305,9 @@ def apply_demo_hit(
     if source_packet:
         item["source_packet"] = dict(source_packet)
     seed_field_meta(item, source="demo_cache", extractor="demo_ocr_replay")
+    from src.workflow.field_resolution.evidence_inventory import attach_document_evidence
+
+    attach_document_evidence(item)
     try:
         from src.workflow.amount_ambiguity import scan_document
 

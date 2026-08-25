@@ -70,6 +70,110 @@ def test_standard_files_skip_unpack(tmp_path: Path):
     assert not packet_blocks_process(analyzed)
 
 
+def test_two_page_standard_document_does_not_require_unpack(tmp_path: Path):
+    job = JOB_STORE.create(title="two-page-standard")
+    job_id = job["job_id"]
+    JOB_STORE.set_goals(job_id, ["gospd01010"])
+    pdf = tmp_path / "YW-2025-3962_销售订单_SO-251209-7214.pdf"
+    _blank_pdf(pdf, 2)
+
+    client = TestClient(app)
+    with pdf.open("rb") as fh:
+        response = client.post(
+            f"/api/v1/workflow/jobs/{job_id}/upload",
+            files=[("files", (pdf.name, fh, "application/pdf"))],
+            data={"process": "false"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    pending = body.get("pending_files") or []
+    assert pending[0].get("packet_kind") == "standard"
+    assert pending[0].get("mixed_packet_declared") is False
+    assert not packet_needs_review(body)
+
+
+def test_unknown_type_is_marked_for_field_review_without_becoming_mixed(tmp_path: Path):
+    job = JOB_STORE.create(title="unknown-type")
+    job_id = job["job_id"]
+    JOB_STORE.set_goals(job_id, ["gospd01010"])
+    pdf = tmp_path / "foreign-bill-of-lading.pdf"
+    _blank_pdf(pdf, 2)
+
+    client = TestClient(app)
+    with pdf.open("rb") as fh:
+        response = client.post(
+            f"/api/v1/workflow/jobs/{job_id}/upload",
+            files=[("files", (pdf.name, fh, "application/pdf"))],
+            data={"process": "false"},
+        )
+
+    assert response.status_code == 200, response.text
+    pending = response.json().get("pending_files") or []
+    assert pending[0]["doc_type"] == "other"
+    assert pending[0]["type_uncertain"] is True
+    assert pending[0]["mixed_packet_declared"] is False
+    assert not packet_needs_review(response.json())
+
+
+def test_auditor_can_move_a_reviewed_pdf_into_manual_unpack(tmp_path: Path):
+    pdf = tmp_path / "reviewed-foreign-document.pdf"
+    _blank_pdf(pdf, 2)
+    job = JOB_STORE.create(title="review-to-mixed")
+    job = JOB_STORE.update(
+        job["job_id"],
+        active_step="field_confirm",
+        classified=[{
+            "file_name": pdf.name,
+            "path": str(pdf),
+            "doc_type": "other",
+            "type_uncertain": True,
+            "raw_text": "PAGE ONE\nPAGE TWO",
+            "fields": {"documentNo": "BL-001"},
+        }],
+        pending_files=[],
+    )
+
+    response = TestClient(app).post(
+        f"/api/v1/workflow/jobs/{job['job_id']}/documents/declare-mixed",
+        json={"file_name": pdf.name},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["classified"] == []
+    assert body["active_step"] == "packet_unpack"
+    assert body["packet_run"]["status"] == "pending_analyze"
+    pending = body["pending_files"]
+    assert pending[0]["file_name"] == pdf.name
+    assert pending[0]["mixed_packet_declared"] is True
+    assert pending[0]["type_uncertain"] is False
+    assert pdf.is_file()
+
+
+def test_manual_mixed_packet_requires_unpack(tmp_path: Path):
+    job = JOB_STORE.create(title="manual-mixed")
+    job_id = job["job_id"]
+    JOB_STORE.set_goals(job_id, ["gospd01010"])
+    pdf = tmp_path / "审计师声明的混装资料包.pdf"
+    _blank_pdf(pdf, 2)
+
+    client = TestClient(app)
+    with pdf.open("rb") as fh:
+        response = client.post(
+            f"/api/v1/workflow/jobs/{job_id}/upload",
+            files=[("files", (pdf.name, fh, "application/pdf"))],
+            data={"process": "false", "mixed_packet": "true"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    pending = body.get("pending_files") or []
+    assert pending[0].get("mixed_packet_declared") is True
+    assert pending[0].get("packet_kind") == "packet_single_chain"
+    assert packet_needs_review(body)
+
+
 def test_situation_a_analyze_and_confirm_to_classified(tmp_path: Path, monkeypatch):
     texts = [CONTRACT_P1, ORDER_P, INVOICE_A, RECEIPT_P]
 
@@ -88,7 +192,7 @@ def test_situation_a_analyze_and_confirm_to_classified(tmp_path: Path, monkeypat
         r = client.post(
             f"/api/v1/workflow/jobs/{job_id}/upload",
             files=[("files", (pdf.name, fh, "application/pdf"))],
-            data={"process": "false"},
+            data={"process": "false", "mixed_packet": "true"},
         )
     assert r.status_code == 200
     pending = r.json().get("pending_files") or []
@@ -153,7 +257,7 @@ def test_situation_b_multi_so_not_one_chain(tmp_path: Path, monkeypatch):
         r = client.post(
             f"/api/v1/workflow/jobs/{job_id}/upload",
             files=[("files", (pdf.name, fh, "application/pdf"))],
-            data={"process": "false"},
+            data={"process": "false", "mixed_packet": "true"},
         )
     assert r.status_code == 200
     analyzed = client.post(f"/api/v1/workflow/jobs/{job_id}/packet/analyze").json()
@@ -199,7 +303,7 @@ def test_dropped_page_is_covered_but_not_materialized(tmp_path: Path, monkeypatc
         client.post(
             f"/api/v1/workflow/jobs/{job_id}/upload",
             files=[("files", (pdf.name, fh, "application/pdf"))],
-            data={"process": "false"},
+            data={"process": "false", "mixed_packet": "true"},
         )
     units = client.post(f"/api/v1/workflow/jobs/{job_id}/packet/analyze").json().get("packet_units") or []
     assert units
@@ -273,7 +377,7 @@ def test_packet_analyze_is_exclusive_per_job(tmp_path: Path, monkeypatch):
         client.post(
             f"/api/v1/workflow/jobs/{job_id}/upload",
             files=[("files", (pdf.name, fh, "application/pdf"))],
-            data={"process": "false"},
+            data={"process": "false", "mixed_packet": "true"},
         )
 
     winners: list[bool] = []

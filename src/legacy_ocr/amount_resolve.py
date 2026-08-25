@@ -91,11 +91,23 @@ def _parse_number(raw: Any) -> Optional[float]:
         return None
 
 
-def to_wan_yuan(value: float) -> float:
-    """>10000 视为元并转万元；否则视为已是万元。"""
-    if value > WAN_YUAN_THRESHOLD:
-        return round(value / WAN_YUAN_THRESHOLD, 6)
-    return round(value, 6)
+def to_wan_yuan(value: float, *, explicit_unit: str = "元") -> float:
+    """按原件明确单位换算为万元，不再根据数值大小猜测单位。"""
+    unit = str(explicit_unit or "元").strip().lower()
+    if unit in {"万元", "万", "rmb万元", "cny万元"}:
+        return round(value, 6)
+    return round(value / WAN_YUAN_THRESHOLD, 6)
+
+
+def _explicit_amount_unit(fields: Dict[str, Any], ocr_text: str) -> str:
+    for key in ("amountUnit", "currencyUnit", "_sourceAmountUnit"):
+        raw = str(fields.get(key) or "").strip()
+        if raw in {"万元", "万", "元"}:
+            return raw
+    text = str(ocr_text or "")
+    if re.search(r"(?:金额)?单位\s*[:：]?\s*(?:人民币)?万元|金额\s*[（(]万元[）)]", text):
+        return "万元"
+    return "元"
 
 
 def in_html_detail_table_header(ocr_text: str, match_start: int) -> bool:
@@ -203,14 +215,15 @@ def resolve_total_amount_wan(
     3. 数量 × 单价（行项目汇总或顶层）
     4. 均不可得 → None
     """
+    explicit_unit = _explicit_amount_unit(fields, ocr_text)
     # 1) 字段或 OCR 文本中的含税合计
     for key in ("totalAmount", "价税合计", "含税总金额", "合计金额"):
         val = _parse_number(fields.get(key))
         if val is not None and val > 0:
-            return to_wan_yuan(val), f"field:{key}"
+            return to_wan_yuan(val, explicit_unit=explicit_unit), f"field:{key}"
     from_text = _first_amount_in_text(ocr_text, TOTAL_AMOUNT_LABELS)
     if from_text is not None:
-        return to_wan_yuan(from_text), "ocr:含税合计"
+        return to_wan_yuan(from_text, explicit_unit=explicit_unit), "ocr:含税合计"
 
     # 2) 未税 × (1+税率)
     net = None
@@ -226,17 +239,17 @@ def resolve_total_amount_wan(
     if net is not None and net > 0:
         if tax_amount is not None and tax_amount > 0:
             gross = net + tax_amount
-            return to_wan_yuan(gross), "calc:未税+税额"
+            return to_wan_yuan(gross, explicit_unit=explicit_unit), "calc:未税+税额"
         if rate is not None:
             gross = net * (1.0 + rate)
-            return to_wan_yuan(gross), "calc:未税×(1+税率)"
+            return to_wan_yuan(gross, explicit_unit=explicit_unit), "calc:未税×(1+税率)"
 
     # 3) 数量 × 单价
     computed = _sum_line_items(fields)
     if computed is None:
         computed = _top_qty_times_price(fields)
     if computed is not None and computed > 0:
-        return to_wan_yuan(computed), "calc:数量×单价"
+        return to_wan_yuan(computed, explicit_unit=explicit_unit), "calc:数量×单价"
 
     return None, None
 

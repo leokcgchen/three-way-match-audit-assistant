@@ -36,6 +36,7 @@ class EvidenceNode(BaseModel):
     role: str
     file_name: str = ""
     doc_type: str = ""
+    business_group_id: Optional[str] = None
     biz_keys: List[str] = Field(default_factory=list)
     primary_id: Optional[str] = None
     linked: bool = False
@@ -45,6 +46,10 @@ class EvidenceNode(BaseModel):
 class EvidenceLink(BaseModel):
     from_role: str
     to_role: str
+    from_file_name: Optional[str] = None
+    to_file_name: Optional[str] = None
+    link_basis: str = "business_key"
+    business_group_id: Optional[str] = None
     shared_keys: List[str] = Field(default_factory=list)
 
 
@@ -72,6 +77,21 @@ def _doc_role(doc_type: str) -> str:
 
 def _node_keys(item: Dict[str, Any]) -> List[str]:
     keys: List[str] = []
+    # 人工确认的业务分组及归类引擎候选也是可审计的业务索引。
+    # 单据自身编号（SO/FP/YS）可以彼此不同，不能因此丢掉与序时账的 YW 连接。
+    explicit_business_keys = [
+        item.get("business_group_id"),
+        item.get("sample_business_id"),
+    ]
+    business_ids = item.get("business_ids")
+    if isinstance(business_ids, (list, tuple, set)):
+        explicit_business_keys.extend(business_ids)
+    elif business_ids:
+        explicit_business_keys.append(business_ids)
+    for value in explicit_business_keys:
+        norm = normalize_biz_id(value)
+        if norm and norm not in keys:
+            keys.append(norm)
     fields = item.get("fields") or {}
     for k in collect_document_biz_keys(fields):
         if k not in keys:
@@ -126,11 +146,48 @@ def _pick_anchor(all_keys: Sequence[str]) -> List[str]:
     return list(dict.fromkeys(all_keys))[:5]
 
 
+# These fields are references to another business document.  They are
+# deliberately narrower than generic documentNo and own identifiers such as
+# invoiceNo/warehouseNo, so heterogeneous source-document numbering does not
+# become a false mismatch.
+_CROSS_REFERENCE_FIELDS = {
+    "订单号": ("orderNo", "salesOrderNo", "purchaseOrderNo"),
+    "合同号": ("contractNo",),
+}
+
+
+def _manual_group_reference_conflicts(
+    classified: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """Return explicit same-semantic reference conflicts inside manual groups."""
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in classified:
+        group_id = str(item.get("business_group_id") or "").strip()
+        if group_id:
+            groups.setdefault(group_id, []).append(item)
+
+    conflicts: List[str] = []
+    for group_docs in groups.values():
+        for label, field_names in _CROSS_REFERENCE_FIELDS.items():
+            values: List[str] = []
+            for item in group_docs:
+                fields = item.get("fields") or {}
+                for field_name in field_names:
+                    value = compact_biz_id(fields.get(field_name))
+                    if value and value not in values:
+                        values.append(value)
+            if len(values) > 1:
+                conflicts.append(f"{label}显式交叉引用冲突：{' / '.join(values)}")
+    return conflicts
+
+
 def build_evidence_chain(
     classified: Sequence[Dict[str, Any]],
     *,
     ledger_matched_biz_id: Optional[str] = None,
     ledger_posting_date: Optional[str] = None,
+    require_contract: bool = True,
+    require_ledger: bool = True,
     require_delivery: bool = False,
     require_payment: bool = False,
 ) -> EvidenceMatchResult:
@@ -138,10 +195,11 @@ def build_evidence_chain(
     根据业务编号将已分类单据与序时账串联为证据链。
 
     - 同链：节点之间共享 SO/HT/PO 等索引（支持去分隔符模糊）
-    - 核心角色默认：合同、订单、签收、发票、序时账；发货/回款可选
+    - 核心角色默认：合同、订单、签收、发票、序时账；调用方可按底稿目标关闭合同/序时账要求
     """
     nodes: List[EvidenceNode] = []
     all_keys: List[str] = []
+    manual_group_nodes: Dict[str, List[int]] = {}
 
     for item in classified:
         role = _doc_role(str(item.get("doc_type") or ""))
@@ -150,15 +208,19 @@ def build_evidence_chain(
             if k not in all_keys:
                 all_keys.append(k)
         primary = keys[0] if keys else None
+        business_group_id = str(item.get("business_group_id") or "").strip() or None
         nodes.append(
             EvidenceNode(
                 role=role,
                 file_name=str(item.get("file_name") or ""),
                 doc_type=str(item.get("doc_type") or ""),
+                business_group_id=business_group_id,
                 biz_keys=keys,
                 primary_id=primary,
             )
         )
+        if business_group_id and role != "other":
+            manual_group_nodes.setdefault(business_group_id, []).append(len(nodes) - 1)
 
     # 序时账节点
     ledger_keys: List[str] = []
@@ -199,13 +261,28 @@ def build_evidence_chain(
         if ri != rj:
             parent[rj] = ri
 
+    def _can_machine_link(a: EvidenceNode, b: EvidenceNode) -> bool:
+        """Human group membership is a hard boundary for machine matching."""
+        a_group, b_group = a.business_group_id, b.business_group_id
+        if a_group or b_group:
+            return bool(a_group and b_group and a_group == b_group)
+        return True
+
+    # A business_group_id is an auditable human decision about membership.  It
+    # therefore joins the business documents before machine-number matching.
+    for member_indexes in manual_group_nodes.values():
+        for index in member_indexes[1:]:
+            _union(member_indexes[0], index)
+
     for i, a in enumerate(nodes):
         for j, b in enumerate(nodes):
             if j <= i:
                 continue
             if a.role == "other" or b.role == "other":
                 continue
-            if _overlap(a.biz_keys, b.biz_keys):
+            if manual_group_nodes and (a.role == "ledger" or b.role == "ledger"):
+                continue
+            if _can_machine_link(a, b) and _overlap(a.biz_keys, b.biz_keys):
                 _union(i, j)
         # 文件名同时含多编号时，把该节点键并入全局锚点簇
         if len(_key_set(a.biz_keys)) >= 2 and ( _key_set(a.biz_keys) & anchor_set):
@@ -224,8 +301,24 @@ def build_evidence_chain(
         for i, n in enumerate(nodes):
             if _key_set(n.biz_keys) & bridge_keys:
                 for j, m in enumerate(nodes):
-                    if _key_set(m.biz_keys) & bridge_keys:
+                    if (
+                        not (manual_group_nodes and (n.role == "ledger" or m.role == "ledger"))
+                        and _can_machine_link(n, m)
+                        and _key_set(m.biz_keys) & bridge_keys
+                    ):
                         _union(i, j)
+
+    # A ledger row may enter a manual packet only when its key identifies one
+    # and only one manual group.  Matching several groups is ambiguous and is
+    # intentionally left unlinked rather than silently crossing the boundary.
+    ledger_index = len(nodes) - 1
+    matching_manual_groups = [
+        indexes
+        for indexes in manual_group_nodes.values()
+        if any(_overlap(nodes[ledger_index].biz_keys, nodes[index].biz_keys) for index in indexes)
+    ]
+    if len(matching_manual_groups) == 1:
+        _union(ledger_index, matching_manual_groups[0][0])
 
     # 主簇：含锚点最多的连通分量
     root_scores: Dict[int, int] = {}
@@ -235,13 +328,19 @@ def build_evidence_chain(
         r = _find(i)
         score = len(_key_set(n.biz_keys) & anchor_set)
         root_scores[r] = root_scores.get(r, 0) + 1 + score
-    main_root = max(root_scores, key=root_scores.get) if root_scores else None
+    if len(manual_group_nodes) == 1:
+        main_root = _find(next(iter(manual_group_nodes.values()))[0])
+    else:
+        main_root = max(root_scores, key=root_scores.get) if root_scores else None
 
     for i, node in enumerate(nodes):
         if node.role == "other":
             continue
         if node.role == "ledger" and not node.biz_keys:
             node.linked = False
+            continue
+        if node.business_group_id:
+            node.linked = main_root is not None and _find(i) == main_root
             continue
         if not node.biz_keys:
             node.linked = False
@@ -256,17 +355,37 @@ def build_evidence_chain(
             if a.role == "other" or b.role == "other":
                 continue
             shared = _overlap(a.biz_keys, b.biz_keys)
-            if shared:
+            if manual_group_nodes and (
+                (a.role == "ledger" and not b.business_group_id)
+                or (b.role == "ledger" and not a.business_group_id)
+            ):
+                continue
+            manual_group_id = (
+                a.business_group_id
+                if a.business_group_id and a.business_group_id == b.business_group_id
+                else None
+            )
+            if shared and not _can_machine_link(a, b):
+                continue
+            if shared or manual_group_id:
                 links.append(
                     EvidenceLink(
                         from_role=a.role,
                         to_role=b.role,
+                        from_file_name=a.file_name or None,
+                        to_file_name=b.file_name or None,
+                        link_basis="manual_business_group" if manual_group_id else "business_key",
+                        business_group_id=manual_group_id,
                         shared_keys=shared,
                     )
                 )
 
     present_roles = {n.role for n in nodes if n.role != "other"}
-    required_core = ["contract", "order", "receipt", "invoice", "ledger"]
+    required_core = ["order", "receipt", "invoice"]
+    if require_contract:
+        required_core.insert(0, "contract")
+    if require_ledger:
+        required_core.append("ledger")
     if require_delivery:
         required_core.insert(2, "delivery")
     if require_payment:
@@ -293,7 +412,10 @@ def build_evidence_chain(
     if "payment" not in present_roles and not require_payment:
         soft_notes.append("未上传回款资料（可选）")
 
-    if hard_missing or unlinked:
+    reference_conflicts = _manual_group_reference_conflicts(classified)
+    manual_scope_error = len(manual_group_nodes) > 1
+
+    if hard_missing or unlinked or reference_conflicts or manual_scope_error:
         status: EvidenceStatus = "FAIL"
         parts: List[str] = []
         if hard_missing:
@@ -305,10 +427,17 @@ def build_evidence_chain(
                 "未与锚点编号连通："
                 + ", ".join(ROLE_LABELS.get(r, r) for r in dict.fromkeys(unlinked))
             )
+        parts.extend(reference_conflicts)
+        if manual_scope_error:
+            parts.append("当前证据链输入包含多个人工业务分组，请按组独立计算")
         issue = "；".join(parts + soft_notes)
     else:
         status = "PASS"
-        issue = "核心证据已按业务编号串联"
+        issue = (
+            "核心证据已按人工业务分组串联"
+            if manual_group_nodes
+            else "核心证据已按业务编号串联"
+        )
         # 发货/回款为可选：缺了也不打 WARNING，避免结论页误拦
 
     summary_bits = []

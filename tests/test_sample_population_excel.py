@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 
 from src.audit.sample_population import (
@@ -57,17 +58,216 @@ def test_parse_prefers_order_no_not_voucher(tmp_path: Path):
     assert patch["ledger_rows"][0]["book_date"] == "2025-01-11"
 
 
+def test_parse_prefers_business_number_and_accepts_multi_segment_ids(tmp_path: Path):
+    xlsx = tmp_path / "adaptive-primary-key.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "抽样清单"
+    ws.append(
+        [
+            "业务编号",
+            "账载日期",
+            "凭证号",
+            "客户名称",
+            "销售订单号",
+            "发票号码",
+            "账载金额",
+        ]
+    )
+    ws.append(
+        [
+            "YW-2025-3986",
+            datetime(2026, 1, 16),
+            "JZ-202601-0148",
+            "甲公司",
+            "SO-251218-7365",
+            "FP-260116-8417",
+            113000,
+        ]
+    )
+    ws.append(
+        [
+            "YW-2025-3962",
+            datetime(2026, 1, 2),
+            "JZ-202601-0087",
+            "乙公司",
+            "SO-251209-7214",
+            "FP-260102-8305",
+            113000,
+        ]
+    )
+    wb.save(xlsx)
+
+    parsed = parse_sample_workbook(xlsx)
+
+    assert parsed["business_ids"] == ["YW-2025-3986", "YW-2025-3962"]
+    assert parsed["primary_key_column"] == "业务编号"
+    assert parsed["primary_key_method"] == "keyword"
+    assert parsed["primary_key_confidence"] > 0.9
+    assert parsed["rows"][0]["book_date"] == "2026-01-16"
+    assert parsed["rows"][0]["book_amount"] == 113000.0
+    assert parsed["rows"][0]["order_numbers"] == ["SO-251218-7365"]
+    assert parsed["rows"][1]["order_numbers"] == ["SO-251209-7214"]
+    assert parsed["rows"][0]["invoice_numbers"] == ["FP-260116-8417"]
+    assert parsed["rows"][0]["voucher_numbers"] == ["JZ-202601-0148"]
+    assert parsed["ambiguous_aliases"] == []
+
+
+def test_parse_keeps_content_matching_features(tmp_path: Path):
+    xlsx = tmp_path / "content-index.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(
+        [
+            "业务编号",
+            "销售订单号",
+            "发票号码",
+            "客户名称",
+            "物料名称",
+            "数量",
+            "单位",
+            "账载金额",
+            "币种",
+        ]
+    )
+    ws.append(
+        [
+            "YW-2025-3995",
+            "SO-251229-7498",
+            "CI-260119-0068",
+            "NordWerk Verpackung GmbH",
+            "NW-500",
+            12,
+            "套",
+            73066.7,
+            "EUR",
+        ]
+    )
+    wb.save(xlsx)
+
+    parsed = parse_sample_workbook(xlsx)
+    row = parsed["rows"][0]
+
+    assert row["invoice_numbers"] == ["CI-260119-0068"]
+    assert row["material_names"] == ["NW-500"]
+    assert row["quantities"] == [12.0]
+    assert row["units"] == ["套"]
+    assert row["currencies"] == ["EUR"]
+
+
+def test_parse_merges_order_aliases_and_reports_cross_business_duplicates(tmp_path: Path):
+    xlsx = tmp_path / "duplicate-order-alias.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "抽样清单"
+    ws.append(["业务编号", "订单编号"])
+    ws.append(["YW-2025-0001", "SO-251201-0001"])
+    ws.append(["YW-2025-0001", "SO-251201-0002"])
+    ws.append(["YW-2025-0002", "SO-251201-0002"])
+    wb.save(xlsx)
+
+    parsed = parse_sample_workbook(xlsx)
+
+    assert parsed["business_ids"] == ["YW-2025-0001", "YW-2025-0002"]
+    assert parsed["rows"][0]["order_numbers"] == [
+        "SO-251201-0001",
+        "SO-251201-0002",
+    ]
+    assert parsed["ambiguous_aliases"] == [
+        {
+            "type": "order_number",
+            "value": "SO-251201-0002",
+            "business_ids": ["YW-2025-0001", "YW-2025-0002"],
+        }
+    ]
+
+
+def test_parse_infers_unknown_erp_identifier_from_unique_values(tmp_path: Path):
+    xlsx = tmp_path / "unknown-erp.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Record Locator", "Posting Date", "Amount", "Customer"])
+    ws.append(["CASE-A9", datetime(2025, 12, 30), 100, "甲公司"])
+    ws.append(["CASE-B7", datetime(2025, 12, 31), 200, "乙公司"])
+    wb.save(xlsx)
+
+    parsed = parse_sample_workbook(xlsx)
+
+    assert parsed["business_ids"] == ["CASE-A9", "CASE-B7"]
+    assert parsed["primary_key_column"] == "Record Locator"
+    assert parsed["primary_key_method"] == "uniqueness_fallback"
+
+
+def test_parse_does_not_treat_row_date_amount_or_customer_as_primary_key(tmp_path: Path):
+    xlsx = tmp_path / "no-safe-key.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["行号", "日期", "金额", "客户名称"])
+    ws.append([1, datetime(2025, 12, 30), 100, "甲公司"])
+    ws.append([2, datetime(2025, 12, 31), 200, "乙公司"])
+    wb.save(xlsx)
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_sample_workbook(xlsx)
+
+    message = str(exc_info.value)
+    assert "未能自动确定唯一业务索引列" in message
+    assert "行号" in message
+    assert "销售订单号" not in message
+
+
 def test_build_population_keeps_book_rows():
     pop = build_sample_population(
         business_ids=["SO25-0001"],
-        rows=[{"business_id": "SO25-0001", "book_date": "2025-01-11", "book_amount": 1}],
+        rows=[
+            {
+                "business_id": "SO25-0001",
+                "book_date": "2025-01-11",
+                "book_amount": 1,
+                "order_numbers": ["ORDER-001"],
+            }
+        ],
         source="excel",
+        ambiguous_aliases=[
+            {
+                "type": "order_number",
+                "value": "ORDER-SHARED",
+                "business_ids": ["SO25-0001", "SO25-0002"],
+            }
+        ],
     )
     assert pop["count"] == 1
     assert pop["rows"][0]["book_date"] == "2025-01-11"
+    assert pop["rows"][0]["order_numbers"] == ["ORDER-001"]
+    assert pop["ambiguous_aliases"][0]["value"] == "ORDER-SHARED"
 
 
-def test_desk_ids_list_first_then_extra_classified():
+def test_desk_chain_exposes_business_and_order_display_index():
+    from src.workflow.sample_desk import build_desk_chains
+
+    job = _gospd_job(
+        [],
+        pop_ids=["YW-2025-3962"],
+        extra={
+            "sample_population": {
+                "business_ids": ["YW-2025-3962"],
+                "rows": [
+                    {
+                        "business_id": "YW-2025-3962",
+                        "order_numbers": ["SO-251209-7214"],
+                    }
+                ],
+            }
+        },
+    )
+
+    row = build_desk_chains(job)[0]
+
+    assert row["order_numbers"] == ["SO-251209-7214"]
+    assert row["display_index"] == "YW-2025-3962 & SO-251209-7214"
+
+
+def test_desk_ids_are_strictly_bounded_by_population():
     job = {
         "sample_population": {"business_ids": ["SO25-0001"]},
         "classified": [
@@ -76,8 +276,7 @@ def test_desk_ids_list_first_then_extra_classified():
         ],
     }
     ids = desk_sample_ids(job)
-    assert ids[0] == "SO25-0001"
-    assert "SO25-7777" in ids
+    assert ids == ["SO25-0001"]
 
 
 def test_desk_ids_drop_truncated_prefix_of_population():
@@ -119,7 +318,7 @@ def test_01030_invoice_does_not_require_posting_date():
 
 
 def _full_invoice(order_no: str = "SO25-0001") -> dict:
-    return {
+    document = {
         "file_name": f"{order_no}.pdf",
         "doc_type": "invoice",
         "fields": {
@@ -136,6 +335,12 @@ def _full_invoice(order_no: str = "SO25-0001") -> dict:
             "documentDate": "2026-01-01",
         },
     }
+    document["raw_text"] = (
+        f"增值税专用发票\n订单号 {order_no}\n发票号码 INV-1\n买方 甲公司\n卖方 乙公司\n"
+        "价税合计 113\n不含税金额 100\n税额 13\n数量 1\n"
+        "入账日期 2026-01-02\n开票日期 2026-01-01"
+    )
+    return document
 
 
 def _full_pack(order_no: str = "SO25-0001") -> list[dict]:
@@ -143,6 +348,10 @@ def _full_pack(order_no: str = "SO25-0001") -> list[dict]:
         {
             "file_name": f"{order_no}_order.pdf",
             "doc_type": "order",
+            "raw_text": (
+                f"销售订单\n订单编号 {order_no}\n合同号 HT-1\n买方 甲公司\n"
+                "数量 1\n价税合计 113"
+            ),
             "fields": {
                 "orderNo": order_no,
                 "contractNo": "HT-1",
@@ -154,6 +363,7 @@ def _full_pack(order_no: str = "SO25-0001") -> list[dict]:
         {
             "file_name": f"{order_no}_receipt.pdf",
             "doc_type": "receipt",
+            "raw_text": f"签收验收单\n关联订单号 {order_no}\n验收日期 2025-12-30\n实收数量 1",
             "fields": {"orderNo": order_no, "acceptanceDate": "2025-12-30", "quantity": "1"},
         },
         _full_invoice(order_no),
@@ -197,6 +407,16 @@ def test_required_fields_depend_on_present_docs():
     assert "acceptanceDate" not in miss
 
 
+def test_01030_three_way_pack_does_not_require_contract_number():
+    docs = _full_pack()
+    docs[0]["fields"].pop("contractNo", None)
+
+    rows = required_fields_for_docs(docs, goal_ids=["gospd01030"])
+
+    assert "contractNo" not in {row["key"] for row in rows}
+    assert "contractNo" not in missing_required_fields(docs, goal_ids=["gospd01030"])
+
+
 def test_auto_pass_fields_when_complete():
     from src.workflow.sample_desk import apply_auto_pass_on_job, desk_row_status
 
@@ -232,7 +452,7 @@ def test_desk_row_missing_labels_chinese():
     assert st["reason"] == "fields_gap"
     assert st["label"].startswith("缺：")
     assert st["missing_labels"]
-    assert "签收日期" in st["missing_labels"] or "数量" in st["missing_labels"]
+    assert "文件日期" in st["missing_labels"] or "数量" in st["missing_labels"]
 
 
 def test_desk_missing_invoice_is_not_field_ok():
@@ -366,8 +586,8 @@ def test_export_blocks_unfinished_population():
     assert "SO25-0002" in conc["affected_groups"]
 
 
-def test_replace_sample_resets_tests_keeps_ocr(tmp_path: Path):
-    """中途换抽样清单：OCR 单据保留，旧测试/确认作废，按新账重绑。"""
+def test_replace_sample_resets_tests_quarantines_old_outside_ocr(tmp_path: Path):
+    """中途换清单：旧 OCR 文件留在异常区，但不得进入新清单业务。"""
     from src.workflow.job_store import JOB_STORE
     from src.workflow.sample_desk import replay_after_sample_replace
 
@@ -410,9 +630,13 @@ def test_replace_sample_resets_tests_keeps_ocr(tmp_path: Path):
     )
     nxt = replay_after_sample_replace(jid)
     docs = nxt["classified"]
-    assert docs[0]["file_name"] == "SO25-0001_inv.pdf"
-    assert docs[0].get("ledger_match_ok") is False
-    assert not docs[0].get("ledger_matched_biz_id")
+    assert docs == []
+    [scope_exception] = nxt.get("scope_exceptions") or []
+    assert scope_exception["file_name"] == "SO25-0001_inv.pdf"
+    assert scope_exception["scope_status"] == "OUT_OF_SAMPLE"
+    assert scope_exception["document"]["file_name"] == "SO25-0001_inv.pdf"
+    assert scope_exception["document"].get("ledger_match_ok") is False
+    assert not scope_exception["document"].get("ledger_matched_biz_id")
     sample = (nxt.get("gospd_sample_results") or {}).get("SO25-0001") or {}
     assert (sample.get("amount_test") or {}).get("overall_status") != "PASS"
     assert nxt.get("fields_confirmed") is not True

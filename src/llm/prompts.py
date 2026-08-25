@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 PROMPT_VERSION = "audit-agent-llm-v1.0"
+FIELD_SUPPLEMENT_PROMPT_VERSION = "field-supplement-p3-v2"
+FIELD_SUPPLEMENT_SCHEMA_VERSION = "llm_field_supplement.v2"
 
 UNIFIED_SYSTEM_PROMPT = """你是“制造业收入审计证据与语义分析模型”，以具备汽车零部件制造业收入审计经验的高级审计师身份工作。你服务于一个由确定性规则引擎主导的审计自动化系统。
 
@@ -130,6 +132,34 @@ OCR文本：
         documents=[{"role": doc_type_label, "ocr_text_preview": (ocr_text or "")[:1500]}],
         extra_sections=extra,
     )
+
+
+def build_field_supplement_p3_user(
+    *,
+    document_id: str,
+    document_role: str,
+    unresolved_fields: Sequence[str],
+    evidence_nodes: Sequence[Dict[str, Any]],
+    rule_fields: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build the evidence-ID-only P3 advisory field supplement request."""
+    return f"""只返回合法 JSON，不要 Markdown。
+
+任务：根据给定证据节点，为规则尚未解决的字段提出候选。你没有审计终态权限，也没有字段验证权限。
+schema_version 必须为 {FIELD_SUPPLEMENT_SCHEMA_VERSION}
+prompt_version 必须为 {FIELD_SUPPLEMENT_PROMPT_VERSION}
+document_id：{document_id}
+document_role：{document_role}
+unresolved_fields：{_dumps(list(unresolved_fields), 2000)}
+rule_fields：{_dumps(rule_fields or {}, 3000)}
+evidence_nodes：{_dumps(list(evidence_nodes), 9000)}
+
+输出字段严格限定为：schema_version、prompt_version、execution_status、document_id、candidates、missing_information、final_professional_conclusion。
+每个 candidate 严格限定为：field_code、field_role、raw_value、normalized_candidate、evidence_ids、reason_code、reason、counterevidence_ids、confidence、recommended_review。
+raw_value 必须逐字存在于本文件的 evidence_nodes；evidence_ids 不得跨文件；缺失填 null，不得用 0 代替未知。
+recommended_review 仅可为 SYSTEM_VALIDATE 或 HUMAN_REVIEW；final_professional_conclusion 必须为 null。
+禁止输出 PASS、FAIL、WARNING、会计结论、调整建议或自行计算的终值。
+"""
 
 
 def build_amount_gap_fill_user(
@@ -471,3 +501,12 @@ def extract_contract_issues(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 }
             )
     return out
+
+
+def build_field_resolution_user(
+    *, evidence_nodes: List[Dict[str, Any]], unresolved_concepts: Sequence[str]
+) -> str:
+    """Controlled entity-resolution prompt; provider invocation remains external."""
+    from src.workflow.field_resolution.semantic_adapter import build_semantic_resolution_prompt
+
+    return build_semantic_resolution_prompt(evidence_nodes, list(unresolved_concepts))
